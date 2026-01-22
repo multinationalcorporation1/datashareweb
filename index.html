@@ -1,1 +1,26 @@
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Cities: Control War</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="ui-layer">
+        <div class="hud-panel">
+            <h2>TERMINAL CITIES</h2>
+            <p><strong>WASD</strong> Move | <strong>CLICK</strong> Shoot</p>
+            <p>Rules:</p>
+            <ul style="font-size: 0.8em; padding-left: 15px;">
+                <li>Shoot ENEMY Post -> Damage</li>
+                <li>Shoot OWN Post -> Repair</li>
+                <li>0 HP -> Ownership Flip</li>
+            </ul>
+        </div>
+        <div class="hud-panel" id="stats">Initializing...</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <script src="script.js"></script>
+</body>
+</html>
