@@ -5,13 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Terminal Cities: Control War</title>
     <link rel="stylesheet" href="style.css">
-</head> 
+</head>
 <body>
     <div id="main-menu">
         <h1 style="color: #eee; text-shadow: 0 0 10px #fff;">TERMINAL CITIES</h1>
         <button class="menu-btn" onclick="startGame('MAIN')">MAIN GAME MODE</button>
         <button class="menu-btn" onclick="startGame('BLACKPOST')">BLACKPOST MODE</button>
         <p style="color: #888; margin-top: 20px;">GOVERNMENT vs GANGS | CONTROL WAR</p>
+    </div>
+
+    <div id="game-over" style="display: none;">
+        <h1 style="color: #e74c3c; font-size: 4em; text-shadow: 0 0 20px #000;">WASTED</h1>
+        <p id="death-reason" style="color: #fff; font-size: 1.5em;">You were killed in action.</p>
+        <button class="menu-btn" onclick="startGame(gameMode)">RESPAWN</button>
     </div>
 
     <div id="ui-layer" style="display: none;">
