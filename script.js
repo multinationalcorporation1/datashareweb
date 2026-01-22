@@ -6,20 +6,27 @@ const mainMenu = document.getElementById('main-menu');
 const jobPanel = document.getElementById('job-panel');
 const wantedDiv = document.getElementById('wanted-level');
 const gpDiv = document.getElementById('gp-display');
+const allegianceDiv = document.getElementById('allegiance-display');
 const gameOverScreen = document.getElementById('game-over');
 
 // --- CONFIGURATION ---
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-const WORLD_WIDTH = 3000;
-const WORLD_HEIGHT = 3000;
+const WORLD_WIDTH = 4000;
+const WORLD_HEIGHT = 4000;
 
 const FACTIONS = {
     NEUTRAL: { id: 'neutral', color: '#555' },
     PLAYER: { id: 'player', color: '#f1c40f' }, // Yellow
-    GOVERNMENT: { id: 'gov', color: '#3498db' }, // Blue (Order)
-    GANG: { id: 'gang', color: '#e74c3c' }       // Red (Chaos/Aggression)
+    NEW_POLICE: { id: 'new_police', color: '#3498db', name: 'New City Police' },
+    DESERT_POLICE: { id: 'desert_police', color: '#e67e22', name: 'Desert Police' },
+    DESERT_GANG: { id: 'desert_gang', color: '#c0392b', name: 'Desert Gangs' },
+    SNOW_POLICE: { id: 'snow_police', color: '#aed6f1', name: 'Snow Police' },
+    SNOW_GANG: { id: 'snow_gang', color: '#7f8c8d', name: 'Snow Gangs' },
+    OLD_POLICE: { id: 'old_police', color: '#27ae60', name: 'Old Police' },
+    OLD_GANG: { id: 'old_gang', color: '#8e44ad', name: 'Old Gangs' },
+    ANIMAL: { id: 'animal', color: '#2ecc71', name: 'Guardian' }
 };
 
 // --- GAME STATE ---
@@ -31,24 +38,34 @@ const keys = {};
 const mouse = { x: 0, y: 0, worldX: 0, worldY: 0, down: false };
 
 const entities = {
+    waves: [], // For water graphics
     player: null,
     posts: [],
     bullets: [],
     units: [],
     particles: [],
     buildings: [],
+    jobCenters: [],
+    treasures: [],
     props: [],
     vehicles: []
 };
 
 let plane = null; // For Blackpost drops
+let playerAllegiance = FACTIONS.NEW_POLICE;
 
 const islands = [
-    // 4 Core Cities on separate islands
-    { name: "New City", x: 100, y: 100, w: 1300, h: 1300, color: '#1a2530', gangRatio: 0.01 }, // 99% Gov
-    { name: "Snow City", x: 1600, y: 100, w: 1300, h: 1300, color: '#2c3e50', gangRatio: 0.40 }, // 60% Gov
-    { name: "Fire City", x: 100, y: 1600, w: 1300, h: 1300, color: '#3b1e1e', gangRatio: 0.40 }, // 60% Gov
-    { name: "Old City", x: 1600, y: 1600, w: 1300, h: 1300, color: '#1e272e', gangRatio: 0.60 }  // 40% Gov
+    // 4 Core Cities
+    { name: "New City", x: 100, y: 100, w: 1500, h: 1500, color: '#1a2530', factions: [FACTIONS.NEW_POLICE] },
+    { name: "Snow City", x: 2400, y: 100, w: 1500, h: 1500, color: '#2c3e50', factions: [FACTIONS.SNOW_POLICE, FACTIONS.SNOW_GANG] },
+    { name: "Fire City", x: 100, y: 2400, w: 1500, h: 1500, color: '#3b1e1e', factions: [FACTIONS.DESERT_POLICE, FACTIONS.DESERT_GANG] },
+    { name: "Old City", x: 2400, y: 2400, w: 1500, h: 1500, color: '#1e272e', factions: [FACTIONS.OLD_POLICE, FACTIONS.OLD_GANG] },
+    // Forests
+    { name: "North Forest", x: 1700, y: 100, w: 600, h: 1500, color: '#145a32', type: 'forest' },
+    { name: "South Forest", x: 1700, y: 2400, w: 600, h: 1500, color: '#145a32', type: 'forest' },
+    { name: "West Forest", x: 100, y: 1700, w: 1500, h: 600, color: '#145a32', type: 'forest' },
+    { name: "East Forest", x: 2400, y: 1700, w: 1500, h: 600, color: '#145a32', type: 'forest' },
+    { name: "Central Hub", x: 1700, y: 1700, w: 600, h: 600, color: '#145a32', type: 'forest' }
 ];
 
 // Mode Specific State
@@ -68,10 +85,52 @@ const WANTED_DECAY_TIME = 1200; // 20 seconds to lose one level
 let playerMoney = 0;
 let playerLevel = 1;
 
-const CITY_GRID_SIZE = 120;
-const CITY_ROAD_WIDTH = 40;
+const CITY_GRID_SIZE = 150;
+const CITY_ROAD_WIDTH = 50;
 
 // --- CLASSES ---
+
+class Treasure {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.collected = false;
+    }
+    draw() {
+        if (this.collected) return;
+        ctx.fillStyle = '#f1c40f'; // Gold
+        ctx.fillRect(this.x - 15, this.y - 15, 30, 30);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        ctx.fillStyle = '#e67e22';
+        ctx.fillRect(this.x - 5, this.y - 5, 10, 10); // Lock
+    }
+}
+
+class JobCenter {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.w = 100;
+        this.h = 100;
+        this.color = '#8e44ad'; // Purple distinctive color
+    }
+    draw() {
+        // Base
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.w, this.h);
+        // Border
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(this.x, this.y, this.w, this.h);
+        // Text Label
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText("JOBS", this.x + this.w/2, this.y + this.h/2);
+    }
+}
 
 class Building {
     constructor(x, y, w, h) {
@@ -107,10 +166,14 @@ class Building {
         // Entrance / Door
         ctx.fillStyle = '#000';
         ctx.fillRect(this.x + this.w/2 - 8, this.y + this.h, 16, 4); // Door at bottom edge
+        ctx.fillStyle = '#555';
+        ctx.fillRect(this.x + this.w/2 - 8, this.y + this.h + 4, 16, 4); // Doormat
 
         // Rooftop Detail (AC Unit)
         ctx.fillStyle = '#2c3e50';
         ctx.fillRect(this.x + 10, this.y + 10, 15, 15);
+        ctx.fillStyle = '#95a5a6';
+        ctx.beginPath(); ctx.arc(this.x + 17.5, this.y + 17.5, 5, 0, Math.PI*2); ctx.fill(); // Fan
     }
 }
 
@@ -198,6 +261,11 @@ class Vehicle {
     draw() {
         ctx.save();
         ctx.translate(this.x, this.y);
+        
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(-this.w / 2 + 5, -this.h / 2 + 5, this.w, this.h);
+
         ctx.rotate(this.angle);
         
         // Car Body
@@ -303,21 +371,29 @@ class Post {
             // Heal own post
             this.points = Math.min(100, this.points + amount);
         } else {
+            // If player shoots, use their allegiance
+            const attackingFaction = shooterFaction.id === 'player' ? playerAllegiance : shooterFaction;
+            
+            if (this.owner.id === attackingFaction.id) {
+                 this.points = Math.min(100, this.points + amount);
+                 return;
+            }
+
             // Damage enemy post
             this.points -= amount;
             if (this.points <= 0) {
                 const previousOwner = this.owner;
                 // FLIP OWNERSHIP
                 this.points = 10; 
-                this.owner = shooterFaction;
+                this.owner = attackingFaction;
                 createExplosion(this.x, this.y, this.owner.color, 20);
                 
                 // Player Actions & GP
                 if (shooterFaction.id === FACTIONS.PLAYER.id) {
-                    if (previousOwner.id === FACTIONS.GOVERNMENT.id) {
+                    if (previousOwner.id.includes('police')) {
                         modifyGP(-100); // Destabilizing action
                         increaseWantedLevel();
-                    } else if (previousOwner.id === FACTIONS.GANG.id) {
+                    } else if (previousOwner.id.includes('gang')) {
                         modifyGP(50); // Stabilizing action
                     }
                 }
@@ -346,12 +422,16 @@ class Unit {
         this.maxHp = 100;
         this.currentVehicle = null;
         this.isCivilian = faction.id === FACTIONS.NEUTRAL.id;
+        this.isAnimal = faction.id === FACTIONS.ANIMAL.id;
         this.work = { type: 'IDLE', timer: Math.random() * 100 };
         this.wildState = false; // "Wild Randomness" Trigger
         this.personality = Math.random(); // 0.0 - 1.0 bias
+        this.ideology = ['AGGRESSIVE', 'PASSIVE', 'PROTECTIVE', 'GREEDY'][Math.floor(Math.random() * 4)];
+        this.wildTimer = 0; // Timeout for wild state
         this.homePost = null; // For Gov defense
         this.attackTarget = null; // For Gang attacks
         this.scanTimer = Math.floor(Math.random() * 60); // Performance throttling
+        this.jobCenterTarget = null;
     }
 
     takeDamage(amount, attackerFaction) {
@@ -360,10 +440,10 @@ class Unit {
             createExplosion(this.x, this.y, this.faction.color, 30);
             // If player killed a gov unit, increase wanted level
             if (attackerFaction.id === FACTIONS.PLAYER.id) {
-                if (this.faction.id === FACTIONS.GOVERNMENT.id) {
+                if (this.faction.id.includes('police')) {
                     modifyGP(-20); // Killing law force
                     increaseWantedLevel();
-                } else if (this.faction.id === FACTIONS.GANG.id) {
+                } else if (this.faction.id.includes('gang')) {
                     modifyGP(10); // Stopping gang members
                 } else if (this.isCivilian) {
                     modifyGP(-50); // Killing civilian
@@ -465,8 +545,16 @@ class Unit {
 
     executeWork() {
         // Check Wild State Completion (Gangs)
-        if (this.wildState && this.faction.id === FACTIONS.GANG.id && this.attackTarget) {
-            if (this.attackTarget.owner.id === FACTIONS.GANG.id) {
+        if (this.wildState && this.faction.id.includes('gang') && this.attackTarget) {
+            this.wildTimer++;
+            if (this.wildTimer > 1800) { // Timeout after ~30 seconds if stuck
+                this.wildState = false;
+                this.attackTarget = null;
+                this.wildTimer = 0;
+                this.pickNewWork();
+                return;
+            }
+            if (this.attackTarget.owner.id === this.faction.id) {
                 this.wildState = false; // Calm down after victory
                 this.attackTarget = null;
                 this.pickNewWork();
@@ -495,6 +583,14 @@ class Unit {
                     this.work.timer = 0; // Friend gone
                 }
                 break;
+            case 'EXERCISE':
+            case 'SMOKE':
+            case 'PHONE':
+                // Stationary tasks
+                break;
+            case 'GUARD_TREASURE':
+                // Animal logic: stay near spawn
+                break;
             case 'ASSAULT': // Wild Gang
                 moveTarget = this.work.target;
                 moveSpeed = this.speed; // Run
@@ -503,6 +599,11 @@ class Unit {
                 moveTarget = this.work.target;
                 moveSpeed = this.speed;
                 if (Math.hypot(this.x - moveTarget.x, this.y - moveTarget.y) < 60) moveTarget = null; // Hold position
+                break;
+            case 'VISIT_JOB':
+                moveTarget = this.work.target;
+                // If arrived, wait a bit then leave
+                if (Math.hypot(this.x - moveTarget.x, this.y - moveTarget.y) < 50) moveTarget = null;
                 break;
         }
 
@@ -523,27 +624,48 @@ class Unit {
         
         // 1. WILD STATE (Event Driven)
         if (this.wildState) {
-            if (this.faction.id === FACTIONS.GANG.id && this.attackTarget) {
+            if (this.faction.id.includes('gang') && this.attackTarget) {
                 this.work = { type: 'ASSAULT', target: this.attackTarget };
                 return;
             }
-            if (this.faction.id === FACTIONS.GOVERNMENT.id && this.homePost) {
+            if (this.faction.id.includes('police') && this.homePost) {
                 this.work = { type: 'DEFEND', target: this.homePost };
                 return;
             }
         }
 
+        // 2. ANIMAL BEHAVIOR
+        if (this.isAnimal) {
+            options.push({ type: 'IDLE', weight: 1.0, duration: 100 });
+            options.push({ type: 'STROLL', weight: 2.0, target: { x: this.x + (Math.random()-0.5)*200, y: this.y + (Math.random()-0.5)*200 } });
+            // Animals guard their area
+        }
+
         // 2. CIVILIAN LIFE (Default for everyone)
-        options.push({ type: 'IDLE', weight: 1.0, duration: 60 + Math.random() * 100 });
-        options.push({ type: 'STROLL', weight: 1.0, target: { x: this.x + (Math.random()-0.5)*300, y: this.y + (Math.random()-0.5)*300 } });
+        else {
+            options.push({ type: 'IDLE', weight: 1.0, duration: 60 + Math.random() * 100 });
+            options.push({ type: 'STROLL', weight: 1.0, target: { x: this.x + (Math.random()-0.5)*300, y: this.y + (Math.random()-0.5)*300 } });
+            
+            // Ideology Tasks
+            // Visit Job Center occasionally
+            if (entities.jobCenters.length > 0) {
+                const nearestJob = entities.jobCenters.sort((a,b) => Math.hypot(this.x-a.x, this.y-a.y) - Math.hypot(this.x-b.x, this.y-b.y))[0];
+                if (Math.hypot(this.x - nearestJob.x, this.y - nearestJob.y) < 1000) { // Only if relatively close
+                    options.push({ type: 'VISIT_JOB', weight: 0.8, target: {x: nearestJob.x + 50, y: nearestJob.y + 50}, duration: 300 });
+                }
+            }
+            if (this.ideology === 'PASSIVE') options.push({ type: 'PHONE', weight: 0.5, duration: 120 });
+            if (this.ideology === 'AGGRESSIVE') options.push({ type: 'EXERCISE', weight: 0.5, duration: 120 });
+            options.push({ type: 'SMOKE', weight: 0.2, duration: 100 });
+        }
         
         // 3. ROLE FLAVOR
-        if (this.faction.id === FACTIONS.GANG.id) {
+        if (this.faction.id.includes('gang')) {
             options.push({ type: 'LOITER', weight: 1.5, duration: 200 });
             // Find a buddy to talk to
             const buddy = entities.units.find(u => u !== this && u.faction === this.faction && Math.hypot(u.x-this.x, u.y-this.y) < 200);
             if (buddy) options.push({ type: 'SOCIAL', weight: 1.0, target: buddy, duration: 180 });
-        } else if (this.faction.id === FACTIONS.GOVERNMENT.id) {
+        } else if (this.faction.id.includes('police')) {
             if (this.homePost) {
                 options.push({ type: 'PATROL', weight: 2.0, target: { x: this.homePost.x + (Math.random()-0.5)*200, y: this.homePost.y + (Math.random()-0.5)*200 } });
             }
@@ -587,34 +709,50 @@ class Unit {
             this.scanTimer = 30 + Math.floor(Math.random() * 30);
         }
 
+        // ANIMAL LOGIC
+        if (this.isAnimal) {
+            // Attack anyone nearby
+            let nearest = null;
+            let minDst = Infinity;
+            entities.units.forEach(u => {
+                if (!u.isAnimal) {
+                    const d = Math.hypot(u.x - this.x, u.y - this.y);
+                    if (d < 200 && d < minDst) { minDst = d; nearest = u; }
+                }
+            });
+            this.target = nearest;
+            return;
+        }
+
         // AI LOGIC: Gangs Attack, Governments Defend
         let nearest = null;
         let minDst = Infinity;
 
         // GANG LOGIC
-        if (this.faction.id === FACTIONS.GANG.id) {
+        if (this.faction.id.includes('gang')) {
             // Only aggressive if in Wild State
             if (this.wildState && this.attackTarget) {
                 // 1. Check if target post is still enemy
-                if (this.attackTarget.owner.id !== FACTIONS.GANG.id) {
+                if (this.attackTarget.owner.id !== this.faction.id) {
                     const d = Math.hypot(this.attackTarget.x - this.x, this.attackTarget.y - this.y);
                     if (d < 300) {
                         this.target = this.attackTarget;
                         return;
                     }
                 }
-                // 2. Target defenders near the objective
+                // 2. Target defenders ONLY if they are very close (Self Defense / Obstacle)
+                // Otherwise, ignore them and focus on the post (executeWork handles movement)
                 entities.units.forEach(u => {
-                    if (u.faction.id === FACTIONS.GOVERNMENT.id || u.faction.id === FACTIONS.PLAYER.id) {
+                    if (u.faction.id.includes('police') || u.faction.id === FACTIONS.PLAYER.id) {
                         const d = Math.hypot(u.x - this.x, u.y - this.y);
-                        if (d < 250 && d < minDst) { minDst = d; nearest = u; }
+                        if (d < 100 && d < minDst) { minDst = d; nearest = u; } // Reduced distraction range
                     }
                 });
             }
-            // Self Defense (Normal State)
-            if (forceSelfDefense) {
+            // Self Defense (Normal State or Wild State fallback)
+            if (forceSelfDefense || (this.wildState && !this.attackTarget)) {
                  entities.units.forEach(u => {
-                    if (u.faction.id !== FACTIONS.GANG.id) {
+                    if (u.faction.id !== this.faction.id) {
                         const d = Math.hypot(u.x - this.x, u.y - this.y);
                         if (d < 200 && d < minDst) { minDst = d; nearest = u; }
                     }
@@ -622,7 +760,7 @@ class Unit {
             }
         } 
         // GOVERNMENT LOGIC
-        else if (this.faction.id === FACTIONS.GOVERNMENT.id) {
+        else if (this.faction.id.includes('police')) {
             // 1. Prioritize Player if Wanted
             if (playerWantedLevel > 0 && entities.player && entities.player.hp > 0) {
                 const playerDist = Math.hypot(entities.player.x - this.x, entities.player.y - this.y);
@@ -636,9 +774,9 @@ class Unit {
             // 2. Defend Post (Guard Duty)
             const defensePoint = this.homePost || this;
             entities.units.forEach(u => {
-                if (u.faction.id === FACTIONS.GANG.id || u.faction.id === FACTIONS.PLAYER.id) {
+                if (u.faction.id.includes('gang') || u.faction.id === FACTIONS.PLAYER.id) {
                     // Only engage if enemy is aggressive (Wild State) or Player
-                    if (u.faction.id === FACTIONS.GANG.id && !u.wildState) return;
+                    if (u.faction.id.includes('gang') && !u.wildState) return;
 
                     const d = Math.hypot(u.x - defensePoint.x, u.y - defensePoint.y);
                     // Strict defense radius
@@ -659,6 +797,10 @@ class Unit {
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
+
+        // Drop Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath(); ctx.ellipse(2, 2, this.radius, this.radius * 0.6, 0, 0, Math.PI * 2); ctx.fill();
         
         // Shoulders (Oval)
         ctx.fillStyle = this.faction.color;
@@ -672,6 +814,30 @@ class Unit {
         ctx.arc(0, 0, this.radius * 0.5, 0, Math.PI * 2);
         ctx.fill();
         
+        // Visuals: Police Cap
+        if (this.faction.id.includes('police')) {
+            ctx.fillStyle = this.faction.color; // Cap matches faction
+            ctx.beginPath(); ctx.arc(0, 0, this.radius * 0.55, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#000'; // Visor
+            ctx.fillRect(0, -this.radius * 0.6, this.radius * 0.6, this.radius * 0.4);
+        }
+        // Visuals: Gang Bandana
+        if (this.faction.id.includes('gang')) {
+            ctx.fillStyle = this.faction.color; // Bandana matches faction
+            ctx.beginPath();
+            ctx.moveTo(-this.radius*0.4, -this.radius*0.1);
+            ctx.lineTo(this.radius*0.4, -this.radius*0.1);
+            ctx.lineTo(0, this.radius*0.6);
+            ctx.fill();
+        }
+        // Visuals: Animal
+        if (this.isAnimal) {
+            ctx.fillStyle = '#e67e22'; // Fur
+            ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.beginPath(); ctx.arc(0, -5, 3, 0, Math.PI*2); ctx.fill(); // Nose
+        }
+
         if (this.isCivilian) {
             ctx.restore();
             return;
@@ -756,6 +922,8 @@ function startGame(mode) {
     entities.buildings = [];
     entities.vehicles = [];
     entities.props = [];
+    entities.jobCenters = [];
+    entities.treasures = [];
     entities.player = null;
     currentJob = null;
     if (jobTimeout) clearTimeout(jobTimeout);
@@ -766,29 +934,45 @@ function startGame(mode) {
     playerWantedLevel = 0;
     wantedLevelTimer = 0;
     playerGP = 0;
+    
+    // Init Waves
+    entities.waves = [];
+    for(let i=0; i<50; i++) {
+        entities.waves.push({x: Math.random()*WORLD_WIDTH, y: Math.random()*WORLD_HEIGHT, t: Math.random()*Math.PI*2});
+    }
 
     generateWorld();
 
     // Generate Posts (Canon: 50 per city)
     islands.forEach((island, idx) => {
+        if (island.type === 'forest') return; // No posts in forests
+
         for (let i = 0; i < 50; i++) {
             // Place posts near road intersections for better alignment
-            const cols = Math.floor((island.w - 100) / CITY_GRID_SIZE);
-            const rows = Math.floor((island.h - 100) / CITY_GRID_SIZE);
+            const cols = Math.floor(island.w / CITY_GRID_SIZE);
+            const rows = Math.floor(island.h / CITY_GRID_SIZE);
             
             // Pick a random intersection
-            const c = Math.floor(Math.random() * (cols + 1));
-            const r = Math.floor(Math.random() * (rows + 1));
+            const c = Math.floor(Math.random() * cols);
+            const r = Math.floor(Math.random() * rows);
             
-            const startX = island.x + 50;
-            const startY = island.y + 50;
+            const startX = island.x;
+            const startY = island.y;
             
             const px = startX + c * CITY_GRID_SIZE;
             const py = startY + r * CITY_GRID_SIZE;
             
             const post = new Post(px, py, `P-${idx}-${i}`);
             // Apply Canon Ratios
-            post.owner = Math.random() < island.gangRatio ? FACTIONS.GANG : FACTIONS.GOVERNMENT;
+            // Use island.factions to determine owner
+            // If island has police and gang, split ownership. If only police, 100% police.
+            if (island.factions.length === 1) {
+                post.owner = island.factions[0];
+            } else {
+                // Assuming [Police, Gang]
+                post.owner = Math.random() < 0.4 ? island.factions[1] : island.factions[0];
+            }
+            
             post.points = 100; // Full health
             entities.posts.push(post);
         }
@@ -796,18 +980,20 @@ function startGame(mode) {
 
     // Spawn Initial Forces
     islands.forEach(island => {
-        // Government Guards (Defenders)
-        for(let i=0; i<10; i++) spawnAI(FACTIONS.GOVERNMENT, island);
-        // Gang Cells (Attackers) - fewer in New City, more in Old City
-        const gangCount = Math.floor(20 * island.gangRatio);
-        for(let i=0; i<gangCount; i++) spawnAI(FACTIONS.GANG, island);
+        if (island.type === 'forest') return;
+
+        // Spawn factions present in this island
+        island.factions.forEach(faction => {
+            const count = faction.id.includes('gang') ? 20 : 15;
+            for(let i=0; i<count; i++) spawnAI(faction, island);
+        });
     });
 
     if (gameMode === 'MAIN') {
         // Create Player immediately in Main Mode
         entities.player = new Unit(1500, 1500, FACTIONS.PLAYER, true);
         entities.units.push(entities.player);
-        
+        // Initial job generation is now manual via interaction or auto if none
         generateJob();
         document.getElementById('shop-panel').style.display = 'block';
     } else {
@@ -824,13 +1010,38 @@ function startGame(mode) {
 function generateWorld() {
     // Generate buildings in city zones
     islands.forEach(island => {
+        if (island.type === 'forest') {
+            // Forest Generation
+            for(let i=0; i<50; i++) {
+                const x = island.x + Math.random() * island.w;
+                const y = island.y + Math.random() * island.h;
+                entities.props.push(new Prop(x, y, 'tree'));
+            }
+            // Treasure
+            if (Math.random() < 0.5) {
+                const tx = island.x + Math.random() * island.w;
+                const ty = island.y + Math.random() * island.h;
+                entities.treasures.push(new Treasure(tx, ty));
+                // Guardians
+                for(let k=0; k<3; k++) {
+                    entities.units.push(new Unit(tx + (Math.random()-0.5)*100, ty + (Math.random()-0.5)*100, FACTIONS.ANIMAL));
+                }
+            }
+            return;
+        }
+
         // Create Grid System
         // Align buildings perfectly within the grid cells defined by CITY_GRID_SIZE
         
-        const startX = island.x + 50; 
-        const startY = island.y + 50;
-        const cols = Math.floor((island.w - 100) / CITY_GRID_SIZE);
-        const rows = Math.floor((island.h - 100) / CITY_GRID_SIZE);
+        const startX = island.x; 
+        const startY = island.y;
+        const cols = Math.floor(island.w / CITY_GRID_SIZE);
+        const rows = Math.floor(island.h / CITY_GRID_SIZE);
+
+        // Place 1 Job Center per city
+        const jobCenterX = startX + Math.floor(cols/2) * CITY_GRID_SIZE + (CITY_GRID_SIZE - 100)/2;
+        const jobCenterY = startY + Math.floor(rows/2) * CITY_GRID_SIZE + (CITY_GRID_SIZE - 100)/2;
+        entities.jobCenters.push(new JobCenter(jobCenterX, jobCenterY));
 
         for (let c = 0; c < cols; c++) {
             for (let r = 0; r < rows; r++) {
@@ -840,6 +1051,11 @@ function generateWorld() {
                 // Center of the block (between roads)
                 const centerX = cellX + CITY_GRID_SIZE / 2;
                 const centerY = cellY + CITY_GRID_SIZE / 2;
+
+                // Check if this spot is taken by the Job Center
+                if (Math.abs(centerX - (jobCenterX + 50)) < 100 && Math.abs(centerY - (jobCenterY + 50)) < 100) {
+                    continue;
+                }
 
                 // Building size (fit within grid minus road width)
                 const maxBuildingSize = CITY_GRID_SIZE - CITY_ROAD_WIDTH - 10;
@@ -866,12 +1082,12 @@ function generateWorld() {
             
             if (isHorizontal) {
                 // On a horizontal road
-                const r = Math.floor(Math.random() * (rows + 1));
+                const r = Math.floor(Math.random() * rows);
                 y = startY + r * CITY_GRID_SIZE;
                 x = island.x + Math.random() * island.w;
             } else {
                 // On a vertical road
-                const c = Math.floor(Math.random() * (cols + 1));
+                const c = Math.floor(Math.random() * cols);
                 x = startX + c * CITY_GRID_SIZE;
                 y = island.y + Math.random() * island.h;
             }
@@ -891,7 +1107,7 @@ function spawnAI(faction, area) {
     const y = area.y + Math.random() * area.h;
     const unit = new Unit(x, y, faction);
 
-    if (faction === FACTIONS.GOVERNMENT) {
+    if (faction.id.includes('police')) {
         // Assign to nearest post
         let nearest = null;
         let minDst = Infinity;
@@ -970,6 +1186,7 @@ function updateGPDisplay() {
     else if (playerGP <= -100) { rank = "THUG"; color = "#e74c3c"; }
 
     gpDiv.innerHTML = `GP: ${playerGP} <span style="color:${color}">[${rank}]</span>`;
+    allegianceDiv.innerHTML = `ALLEGIANCE: <span style="color:${playerAllegiance.color}">${playerAllegiance.name || 'NONE'}</span>`;
 }
 
 function generateJob() {
@@ -982,8 +1199,11 @@ function generateJob() {
     if (playerGP < -100) isLegal = false;
 
     // Legal: Target Gang posts. Illegal: Target Gov posts.
-    const targetFaction = isLegal ? FACTIONS.GANG : FACTIONS.GOVERNMENT;
-    const candidates = entities.posts.filter(p => p.owner.id === targetFaction.id);
+    // Simplified: Legal targets any gang, Illegal targets any police
+    const candidates = entities.posts.filter(p => {
+        if (isLegal) return p.owner.id.includes('gang');
+        else return p.owner.id.includes('police');
+    });
     
     if (candidates.length === 0) {
         jobPanel.innerText = "No contracts available right now.";
@@ -1000,7 +1220,8 @@ function generateJob() {
 }
 
 function checkJobCompletion(post) {
-    if (currentJob && currentJob.target === post && post.owner.id === 'player') {
+    // Check if post owner matches player allegiance
+    if (currentJob && currentJob.target === post && post.owner.id === playerAllegiance.id) {
         addMoney(currentJob.reward);
         createExplosion(entities.player.x, entities.player.y, '#FFD700', 100);
         
@@ -1035,6 +1256,15 @@ function interact() {
         entities.player.currentVehicle = null;
         entities.player.x += 40; // Eject to the side
     } else {
+        // Check for Job Center interaction
+        for (const jc of entities.jobCenters) {
+            if (Math.hypot(entities.player.x - (jc.x + jc.w/2), entities.player.y - (jc.y + jc.h/2)) < 100) {
+                generateJob();
+                createExplosion(entities.player.x, entities.player.y, '#8e44ad', 20);
+                return;
+            }
+        }
+
         // Try to enter vehicle
         for (const v of entities.vehicles) {
             if (!v.driver && Math.hypot(v.x - entities.player.x, v.y - entities.player.y) < 50) {
@@ -1054,14 +1284,31 @@ function buyItem(key) {
         playerMoney -= 200;
         entities.player.hp = Math.min(entities.player.hp + 50, entities.player.maxHp);
         createExplosion(entities.player.x, entities.player.y, '#0f0', 10);
-    } else if (key === 'Digit2' && playerMoney >= 1000) {
+    } else if (key === 'Digit2' && playerMoney >= 1000) { // Weapon Upgrade
         playerMoney -= 1000;
         playerLevel++;
         createExplosion(entities.player.x, entities.player.y, '#00f', 20);
-    } else if (key === 'Digit3' && playerMoney >= 2500) {
+    } else if (key === 'Digit3' && playerMoney >= 2500) { // Vehicle
         playerMoney -= 2500;
         // Spawn vehicle near player
         entities.vehicles.push(new Vehicle(entities.player.x + 50, entities.player.y));
+    } else {
+        // Faction Switching (Keys 1-7, mapped to 4-0 for simplicity or just check key code)
+        // Actually, let's use Number keys 4-9 and 0 for factions since 1-3 are shop
+        const factionMap = {
+            'Digit4': FACTIONS.NEW_POLICE,
+            'Digit5': FACTIONS.DESERT_POLICE,
+            'Digit6': FACTIONS.DESERT_GANG,
+            'Digit7': FACTIONS.SNOW_POLICE,
+            'Digit8': FACTIONS.SNOW_GANG,
+            'Digit9': FACTIONS.OLD_POLICE,
+            'Digit0': FACTIONS.OLD_GANG
+        };
+        if (factionMap[key]) {
+            playerAllegiance = factionMap[key];
+            updateGPDisplay(); // Updates allegiance text too
+            createExplosion(entities.player.x, entities.player.y, playerAllegiance.color, 10);
+        }
     }
 }
 
@@ -1072,18 +1319,18 @@ function updateStrategicAI() {
 
         // TRIGGER GANG ATTACKS
         // Instead of spawning new units, command existing idle gangs to attack
-        const idleGangs = entities.units.filter(u => u.faction.id === FACTIONS.GANG.id && !u.wildState);
+        const idleGangs = entities.units.filter(u => u.faction.id.includes('gang') && !u.wildState);
         
         if (idleGangs.length > 0 && Math.random() < 0.3) { // 30% chance to trigger attack
-            // Pick a target post (Gov owned)
-            const targets = entities.posts.filter(p => p.owner.id === FACTIONS.GOVERNMENT.id);
+            // Pick a target post (Police owned)
+            const targets = entities.posts.filter(p => p.owner.id.includes('police'));
             if (targets.length > 0) {
                 const targetPost = targets[Math.floor(Math.random() * targets.length)];
                 
                 // Send 3-5 nearby gang members to attack it (Activate Wild Randomness)
                 idleGangs.sort((a, b) => Math.hypot(a.x - targetPost.x, a.y - targetPost.y) - Math.hypot(b.x - targetPost.x, b.y - targetPost.y));
                 
-                for(let i=0; i<Math.min(5, idleGangs.length); i++) {
+                for(let i=0; i<Math.min(8, idleGangs.length); i++) { // Increased squad size
                     idleGangs[i].wildState = true;
                     idleGangs[i].attackTarget = targetPost;
                     idleGangs[i].pickNewWork(); // Switch immediately
@@ -1184,6 +1431,18 @@ function update() {
         }
     }
 
+    // Treasure Collection
+    if (entities.player) {
+        entities.treasures.forEach(t => {
+            if (!t.collected && Math.hypot(t.x - entities.player.x, t.y - entities.player.y) < 30) {
+                t.collected = true;
+                addMoney(5000);
+                modifyGP(50);
+                createExplosion(t.x, t.y, '#f1c40f', 50);
+            }
+        });
+    }
+
     // Particles
     for (let i = entities.particles.length - 1; i >= 0; i--) {
         const p = entities.particles[i];
@@ -1212,8 +1471,12 @@ function deployPlayer() {
 }
 
 function updateStats() {
-    const counts = { player: 0, gov: 0, gang: 0 };
-    entities.posts.forEach(p => counts[p.owner.id] ? counts[p.owner.id]++ : null);
+    // Simplified stats for UI
+    const counts = { police: 0, gang: 0 };
+    entities.posts.forEach(p => {
+        if (p.owner.id.includes('police')) counts.police++;
+        if (p.owner.id.includes('gang')) counts.gang++;
+    });
     
     let extraHtml = '';
     if (gameMode === 'BLACKPOST' && blackpostActive) {
@@ -1221,10 +1484,10 @@ function updateStats() {
     }
 
     statsDiv.innerHTML = `
-        <span style="color:${FACTIONS.PLAYER.color}">PLAYER: ${counts.player || 0}</span> | 
+        <span style="color:${FACTIONS.PLAYER.color}">PLAYER</span> | 
         <span style="color:#FFD700">$${playerMoney} (Lvl ${playerLevel})</span><br>
-        <span style="color:${FACTIONS.GOVERNMENT.color}">GOVERNMENT: ${counts.gov || 0}</span><br>
-        <span style="color:${FACTIONS.GANG.color}">GANGS: ${counts.gang || 0}</span>
+        <span style="color:#3498db">POLICE CONTROL: ${counts.police}</span><br>
+        <span style="color:#e74c3c">GANG CONTROL: ${counts.gang}</span>
         ${extraHtml}
     `;
 }
@@ -1235,6 +1498,14 @@ function draw() {
     // Background
     ctx.fillStyle = '#154360'; // Deep Ocean Blue
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw Waves
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    entities.waves.forEach(w => {
+        w.t += 0.02;
+        const wx = w.x + Math.cos(w.t) * 20;
+        ctx.fillRect(wx - camera.x * 0.2, w.y - camera.y * 0.2, 40, 2); // Parallax effect
+    });
 
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
@@ -1249,54 +1520,34 @@ function draw() {
         ctx.fill();
     }
 
-    // Draw Bridges (Connecting the 4 islands)
-    ctx.strokeStyle = '#566573'; // Asphalt Grey
-    ctx.lineWidth = 100;
-    ctx.beginPath();
-    // Top Bridge (New -> Snow)
-    ctx.moveTo(1400, 750); ctx.lineTo(1600, 750);
-    // Bottom Bridge (Fire -> Old)
-    ctx.moveTo(1400, 2250); ctx.lineTo(1600, 2250);
-    // Left Bridge (New -> Fire)
-    ctx.moveTo(750, 1400); ctx.lineTo(750, 1600);
-    // Right Bridge (Snow -> Old)
-    ctx.moveTo(2250, 1400); ctx.lineTo(2250, 1600);
-    // Center Cross (Optional Hub)
-    ctx.moveTo(1400, 1400); ctx.lineTo(1600, 1600);
-    ctx.stroke();
-    
-    // Bridge Markings
-    ctx.strokeStyle = '#f1c40f'; // Yellow lines
-    ctx.lineWidth = 2;
-    ctx.setLineDash([20, 20]);
-    ctx.stroke();
-    ctx.setLineDash([]); // Reset
-
     // Draw Islands
     islands.forEach(island => {
         // Ground
         ctx.fillStyle = '#7f8c8d'; // Concrete Grey base
         if (island.name.includes("Snow")) ctx.fillStyle = '#d6dbdf'; // Snow
         if (island.name.includes("Fire")) ctx.fillStyle = '#935116'; // Dirt/Desert
+        if (island.type === 'forest') ctx.fillStyle = '#145a32'; // Forest Green
         
         ctx.fillRect(island.x, island.y, island.w, island.h);
         
+        if (island.type === 'forest') return;
+
         // City Grid (Sidewalks)
         ctx.strokeStyle = '#95a5a6'; // Concrete Sidewalk
         ctx.lineWidth = CITY_ROAD_WIDTH + 10; 
         ctx.beginPath();
-        const startX = island.x + 50;
-        const startY = island.y + 50;
-        for(let x = startX; x <= island.x + island.w - 50; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
-        for(let y = startY; y <= island.y + island.h - 50; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
+        const startX = island.x;
+        const startY = island.y;
+        for(let x = startX; x <= island.x + island.w; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
+        for(let y = startY; y <= island.y + island.h; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
         ctx.stroke();
 
         // City Grid (Asphalt Roads)
         ctx.strokeStyle = '#2c3e50'; // Dark Asphalt
         ctx.lineWidth = CITY_ROAD_WIDTH; 
         ctx.beginPath();
-        for(let x = startX; x <= island.x + island.w - 50; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
-        for(let y = startY; y <= island.y + island.h - 50; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
+        for(let x = startX; x <= island.x + island.w; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
+        for(let y = startY; y <= island.y + island.h; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
         ctx.stroke();
 
         // Road Markings (Dashed Lines)
@@ -1304,14 +1555,16 @@ function draw() {
         ctx.lineWidth = 2;
         ctx.setLineDash([15, 25]);
         ctx.beginPath();
-        for(let x = startX; x <= island.x + island.w - 50; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
-        for(let y = startY; y <= island.y + island.h - 50; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
+        for(let x = startX; x <= island.x + island.w; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
+        for(let y = startY; y <= island.y + island.h; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
         ctx.stroke();
         ctx.setLineDash([]);
     });
 
     // Draw Entities
     entities.buildings.forEach(b => b.draw());
+    entities.jobCenters.forEach(j => j.draw());
+    entities.treasures.forEach(t => t.draw());
     entities.props.forEach(p => p.draw());
     entities.posts.forEach(p => p.draw());
     entities.units.forEach(u => u.draw());
