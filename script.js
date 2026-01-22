@@ -1,6 +1,9 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const statsDiv = document.getElementById('stats');
+const uiLayer = document.getElementById('ui-layer');
+const mainMenu = document.getElementById('main-menu');
+const jobPanel = document.getElementById('job-panel');
 
 // --- CONFIGURATION ---
 canvas.width = window.innerWidth;
@@ -14,10 +17,14 @@ const FACTIONS = {
     PLAYER: { id: 'player', color: '#f1c40f' }, // Yellow
     RED: { id: 'red', color: '#e74c3c' },       // Fire City
     BLUE: { id: 'blue', color: '#3498db' },     // New City
-    GREEN: { id: 'green', color: '#2ecc71' }    // Old City
+    GREEN: { id: 'green', color: '#2ecc71' },   // Old City
+    GANG: { id: 'gang', color: '#9b59b6' }      // Gangs (Purple)
 };
 
 // --- GAME STATE ---
+let gameMode = null; // 'MAIN' or 'BLACKPOST'
+let gameState = 'MENU'; // MENU, PLANE, PLAYING
+let gameRunning = false;
 const camera = { x: 0, y: 0 };
 const keys = {};
 const mouse = { x: 0, y: 0, worldX: 0, worldY: 0, down: false };
@@ -27,8 +34,12 @@ const entities = {
     posts: [],
     bullets: [],
     units: [],
-    particles: []
+    particles: [],
+    buildings: [],
+    vehicles: []
 };
+
+let plane = null; // For Blackpost drops
 
 const islands = [
     // Row 1: [1 New Forest] [2 New City] [3 Desert City] [4 Desert Forest]
@@ -43,16 +54,73 @@ const islands = [
     { name: "Old Forest", x: 2250, y: 1500, w: 650, h: 1300, color: '#0f1f0f' }
 ];
 
-// Blackpost Mode State
+// Mode Specific State
 let blackpostTimer = 0;
-const BLACKPOST_INTERVAL = 1800; // ~30 seconds
+const BLACKPOST_INTERVAL = 3600; // 60 seconds (Canon)
 let blackpostActive = false;
 
-// Economy State
+let currentJob = null;
+let strategicTimer = 0;
+let jobTimeout = null;
+
 let playerMoney = 0;
 let playerLevel = 1;
 
 // --- CLASSES ---
+
+class Building {
+    constructor(x, y, w, h) {
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+    }
+    draw() {
+        ctx.fillStyle = '#2c3e50'; // A dark, neutral building color
+        ctx.fillRect(this.x, this.y, this.w, this.h);
+        ctx.strokeStyle = '#233140';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(this.x, this.y, this.w, this.h);
+    }
+}
+
+class Vehicle {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.w = 25;
+        this.h = 45;
+        this.angle = 0;
+        this.speed = 0;
+        this.maxSpeed = 9;
+        this.hp = 400;
+        this.maxHp = 400;
+        this.driver = null;
+        this.faction = FACTIONS.NEUTRAL;
+    }
+
+    update() {
+        this.x += Math.sin(this.angle) * this.speed;
+        this.y -= Math.cos(this.angle) * this.speed;
+        this.speed *= 0.96; // Friction
+
+        if (this.driver) {
+            this.driver.x = this.x;
+            this.driver.y = this.y;
+        }
+    }
+
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        ctx.fillStyle = this.driver ? this.driver.faction.color : FACTIONS.NEUTRAL.color;
+        ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
+        ctx.fillStyle = '#000'; // Windshield
+        ctx.fillRect(-this.w / 2 + 4, -this.h / 2 + 5, this.w - 8, 12);
+        ctx.restore();
+    }
+}
 
 class Post {
     constructor(x, y, id) {
@@ -70,7 +138,7 @@ class Post {
     }
 
     update() {
-        if (this.isBlackpost) {
+        if (gameMode === 'BLACKPOST' && this.isBlackpost) {
             this.blackzoneRadius += 0.5; // Zone expands
             
             // Damage units inside blackzone
@@ -86,7 +154,7 @@ class Post {
 
     draw() {
         // Draw Blackzone
-        if (this.isBlackpost) {
+        if (gameMode === 'BLACKPOST' && this.isBlackpost) {
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.blackzoneRadius, 0, Math.PI * 2);
             ctx.fillStyle = 'rgba(255, 0, 0, 0.1)';
@@ -101,9 +169,17 @@ class Post {
         ctx.fillRect(this.x - this.w/2, this.y - this.h/2, this.w, this.h);
         
         // Draw border
-        ctx.strokeStyle = this.isBlackpost ? '#f00' : '#fff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(this.x - this.w/2, this.y - this.h/2, this.w, this.h);
+        ctx.strokeStyle = (gameMode === 'BLACKPOST' && this.isBlackpost) ? '#f00' : '#fff';
+        
+        // Job Target Marker (Main Mode)
+        if (gameMode === 'MAIN' && currentJob && currentJob.target === this) {
+            ctx.strokeStyle = '#f1c40f';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(this.x - this.w/2 - 5, this.y - this.h/2 - 5, this.w + 10, this.h + 10);
+        } else {
+            ctx.lineWidth = 2;
+            ctx.strokeRect(this.x - this.w/2, this.y - this.h/2, this.w, this.h);
+        }
 
         // Draw Health Bar
         const barWidth = 60;
@@ -130,6 +206,7 @@ class Post {
                 // Economy Reward
                 if (shooterFaction.id === FACTIONS.PLAYER.id) {
                     addMoney(500);
+                    if (gameMode === 'MAIN') checkJobCompletion(this);
                 }
             }
         }
@@ -149,28 +226,54 @@ class Unit {
         this.target = null;
         this.hp = 100;
         this.maxHp = 100;
+        this.currentVehicle = null;
     }
 
     update() {
         if (this.hp <= 0) return; // Dead
 
         if (this.isPlayer) {
-            // Player Movement
-            let dx = 0;
-            let dy = 0;
-            if (keys['KeyW']) dy -= 1;
-            if (keys['KeyS']) dy += 1;
-            if (keys['KeyA']) dx -= 1;
-            if (keys['KeyD']) dx += 1;
+            let dx = 0, dy = 0; // For collision
 
-            if (dx !== 0 || dy !== 0) {
-                const len = Math.hypot(dx, dy);
-                this.x += (dx / len) * this.speed;
-                this.y += (dy / len) * this.speed;
+            if (this.currentVehicle) {
+                // --- VEHICLE CONTROL ---
+                if (keys['KeyW']) this.currentVehicle.speed = Math.min(this.currentVehicle.maxSpeed, this.currentVehicle.speed + 0.4);
+                if (keys['KeyS']) this.currentVehicle.speed = Math.max(-this.currentVehicle.maxSpeed / 2, this.currentVehicle.speed - 0.4);
+                
+                const turnSpeed = Math.abs(this.currentVehicle.speed / this.currentVehicle.maxSpeed);
+                if (keys['KeyA']) this.currentVehicle.angle -= 0.04 * turnSpeed;
+                if (keys['KeyD']) this.currentVehicle.angle += 0.04 * turnSpeed;
+
+                // Aiming is independent
+                this.angle = Math.atan2(mouse.worldY - this.y, mouse.worldX - this.x);
+
+            } else {
+                // --- ON-FOOT CONTROL ---
+                if (keys['KeyW']) dy -= 1;
+                if (keys['KeyS']) dy += 1;
+                if (keys['KeyA']) dx -= 1;
+                if (keys['KeyD']) dx += 1;
+
+                if (dx !== 0 || dy !== 0) {
+                    const len = Math.hypot(dx, dy);
+                    this.x += (dx / len) * this.speed;
+                    this.y += (dy / len) * this.speed;
+                }
+                // Aim at mouse
+                this.angle = Math.atan2(mouse.worldY - this.y, mouse.worldX - this.x);
             }
 
-            // Aim at mouse
-            this.angle = Math.atan2(mouse.worldY - this.y, mouse.worldX - this.x);
+            // Building Collision for player on foot
+            if (!this.currentVehicle && (dx !== 0 || dy !== 0)) {
+                for (const b of entities.buildings) {
+                    if (this.x > b.x && this.x < b.x + b.w && this.y > b.y && this.y < b.y + b.h) {
+                        const len = Math.hypot(dx, dy);
+                        this.x -= (dx / len) * this.speed; // Revert move
+                        this.y -= (dy / len) * this.speed;
+                        break;
+                    }
+                }
+            }
 
             // Shooting
             if (mouse.down && this.cooldown <= 0) {
@@ -225,13 +328,13 @@ class Unit {
     }
 
     draw() {
-        if (this.hp <= 0) return;
+        if (this.hp <= 0 || this.currentVehicle) return; // Don't draw if dead or in vehicle
 
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
         
-        // Body
+        // Body (always infantry now)
         ctx.fillStyle = this.faction.color;
         ctx.beginPath();
         ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
@@ -269,6 +372,14 @@ class Bullet {
         this.x += this.vx;
         this.y += this.vy;
         this.life--;
+
+        // Collision with buildings
+        for (const b of entities.buildings) {
+            if (this.x > b.x && this.x < b.x + b.w && this.y > b.y && this.y < b.y + b.h) {
+                this.life = 0; // Kill bullet
+                createExplosion(this.x, this.y, '#888', 3); // Spark effect
+            }
+        }
     }
 
     draw() {
@@ -281,19 +392,53 @@ class Bullet {
 
 // --- SYSTEMS ---
 
-function init() {
-    // Create Player
-    entities.player = new Unit(1500, 1500, FACTIONS.PLAYER, true);
-    entities.units.push(entities.player);
+function startGame(mode) {
+    gameMode = mode;
+    gameRunning = true;
+    gameState = 'PLAYING'; // Default, overridden below for Blackpost
+    mainMenu.style.display = 'none';
+    uiLayer.style.display = 'block';
+    document.getElementById('mode-title').innerText = mode === 'MAIN' ? 'MAIN GAME MODE' : 'BLACKPOST MODE';
+    
+    // Reset State
+    entities.units = [];
+    entities.posts = [];
+    entities.bullets = [];
+    entities.particles = [];
+    entities.buildings = [];
+    entities.vehicles = [];
+    entities.player = null;
+    currentJob = null;
+    if (jobTimeout) clearTimeout(jobTimeout);
+    playerMoney = 0;
+    playerLevel = 1;
+    blackpostActive = false;
+    blackpostTimer = 0;
 
-    // Generate Posts (5 per zone)
+    generateWorld();
+
+    // Generate Posts (Canon: 50 per city approx)
     islands.forEach((island, idx) => {
         let faction = FACTIONS.NEUTRAL;
+        let postCount = 10; // Default for forests
+
+        // City Zones get more posts and specific owners
         if (idx === 1) faction = FACTIONS.BLUE;  // New City
         if (idx === 2) faction = FACTIONS.RED;   // Desert City
         if (idx === 6) faction = FACTIONS.GREEN; // Old City
+        
+        // Check if it's a city zone (Indices 1, 2, 5, 6)
+        if ([1, 2, 5, 6].includes(idx)) {
+            postCount = 50; // High density for cities
+        }
 
-        for (let i = 0; i < 5; i++) {
+        // Snow City (5) is neutral/contested
+        if (idx === 5) {
+            faction = FACTIONS.NEUTRAL;
+            postCount = 50;
+        }
+
+        for (let i = 0; i < postCount; i++) {
             const px = island.x + 100 + Math.random() * (island.w - 200);
             const py = island.y + 100 + Math.random() * (island.h - 200);
             const post = new Post(px, py, `P-${idx}-${i}`);
@@ -307,6 +452,44 @@ function init() {
     for(let i=0; i<12; i++) spawnAI(FACTIONS.BLUE, islands[1]); // New City
     for(let i=0; i<12; i++) spawnAI(FACTIONS.RED, islands[2]);  // Desert City
     for(let i=0; i<12; i++) spawnAI(FACTIONS.GREEN, islands[6]); // Old City
+    // Snow City Guards
+    for(let i=0; i<12; i++) spawnAI(FACTIONS.NEUTRAL, islands[5]); 
+
+    if (gameMode === 'MAIN') {
+        // Create Player immediately in Main Mode
+        entities.player = new Unit(1500, 1500, FACTIONS.PLAYER, true);
+        entities.units.push(entities.player);
+        
+        generateJob();
+        document.getElementById('shop-panel').style.display = 'block';
+    } else {
+        // Blackpost Mode: Plane Drop
+        gameState = 'PLANE';
+        document.getElementById('shop-panel').style.display = 'none';
+        plane = { x: -200, y: 500 + Math.random() * 2000, speed: 15 };
+        jobPanel.innerText = "SURVIVE THE BLACKZONES";
+    }
+
+    loop();
+}
+
+function generateWorld() {
+    // Generate buildings in city zones
+    const cityZones = [islands[1], islands[2], islands[6]]; // New, Desert, Old
+    cityZones.forEach(zone => {
+        for (let i = 0; i < 15; i++) { // 15 buildings per city
+            const w = 40 + Math.random() * 80;
+            const h = 40 + Math.random() * 80;
+            const x = zone.x + Math.random() * (zone.w - w);
+            const y = zone.y + Math.random() * (zone.h - h);
+            entities.buildings.push(new Building(x, y, w, h));
+        }
+    });
+
+    // Spawn some neutral vehicles
+    for(let i=0; i<10; i++) {
+        entities.vehicles.push(new Vehicle(Math.random() * WORLD_WIDTH, Math.random() * WORLD_HEIGHT));
+    }
 }
 
 function spawnAI(faction, area) {
@@ -333,30 +516,161 @@ function createExplosion(x, y, color, count) {
 
 function addMoney(amount) {
     playerMoney += amount;
-    // Simple auto-upgrade system
-    if (playerMoney > playerLevel * 1000) {
-        playerMoney -= playerLevel * 1000;
+    // Auto-upgrade only in Blackpost mode
+    if (gameMode === 'BLACKPOST') {
+        if (playerMoney > playerLevel * 1000) {
+            playerMoney -= playerLevel * 1000;
+            playerLevel++;
+            createExplosion(entities.player.x, entities.player.y, '#FFD700', 50);
+        }
+    }
+}
+
+// --- MAIN MODE SYSTEMS ---
+
+function generateJob() {
+    if (gameMode !== 'MAIN') return;
+    const candidates = entities.posts.filter(p => p.owner.id !== 'player');
+    if (candidates.length === 0) {
+        jobPanel.innerText = "All posts captured! You rule the city.";
+        return;
+    }
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    currentJob = {
+        target: target,
+        reward: 1500,
+        desc: `CONTRACT: Capture Post in ${getZoneName(target.x, target.y)}`
+    };
+    jobPanel.innerText = currentJob.desc;
+}
+
+function checkJobCompletion(post) {
+    if (currentJob && currentJob.target === post && post.owner.id === 'player') {
+        addMoney(currentJob.reward);
+        createExplosion(entities.player.x, entities.player.y, '#FFD700', 100);
+        jobPanel.innerText = `CONTRACT COMPLETE! +$${currentJob.reward}`;
+        currentJob = null;
+        jobTimeout = setTimeout(generateJob, 3000);
+    }
+}
+
+function getZoneName(x, y) {
+    for(let island of islands) {
+        if (x >= island.x && x <= island.x + island.w && y >= island.y && y <= island.y + island.h) {
+            return island.name;
+        }
+    }
+    return "Wilderness";
+}
+
+function interact() {
+    if (!entities.player) return;
+
+    if (entities.player.currentVehicle) {
+        // Exit vehicle
+        const v = entities.player.currentVehicle;
+        v.driver = null;
+        entities.player.currentVehicle = null;
+        entities.player.x += 40; // Eject to the side
+    } else {
+        // Try to enter vehicle
+        for (const v of entities.vehicles) {
+            if (!v.driver && Math.hypot(v.x - entities.player.x, v.y - entities.player.y) < 50) {
+                entities.player.currentVehicle = v;
+                v.driver = entities.player;
+                v.faction = entities.player.faction;
+                break;
+            }
+        }
+    }
+}
+
+function buyItem(key) {
+    if (gameMode !== 'MAIN') return;
+    
+    if (key === 'Digit1' && playerMoney >= 200) {
+        playerMoney -= 200;
+        entities.player.hp = Math.min(entities.player.hp + 50, entities.player.maxHp);
+        createExplosion(entities.player.x, entities.player.y, '#0f0', 10);
+    } else if (key === 'Digit2' && playerMoney >= 1000) {
+        playerMoney -= 1000;
         playerLevel++;
-        createExplosion(entities.player.x, entities.player.y, '#FFD700', 50); // Gold explosion
+        createExplosion(entities.player.x, entities.player.y, '#00f', 20);
+    } else if (key === 'Digit3' && playerMoney >= 2500) {
+        playerMoney -= 2500;
+        // Spawn vehicle near player
+        entities.vehicles.push(new Vehicle(entities.player.x + 50, entities.player.y));
+    }
+}
+
+function updateStrategicAI() {
+    strategicTimer++;
+    if (strategicTimer > 600) { // Every ~10 seconds
+        
+        // Factions reinforce if they are weak
+        [FACTIONS.RED, FACTIONS.BLUE, FACTIONS.GREEN].forEach(faction => {
+            const ownedPosts = entities.posts.filter(p => p.owner.id === faction.id).length;
+            if (ownedPosts < 15) {
+                // Spawn reinforcement squad at their capital
+                let spawnZone = islands[1]; // Default
+                if (faction === FACTIONS.RED) spawnZone = islands[2];
+                if (faction === FACTIONS.GREEN) spawnZone = islands[6];
+                
+                for(let i=0; i<4; i++) spawnAI(faction, spawnZone);
+            }
+        });
+
+        // Gangs spawn in forests (Canon 3.2)
+        if (Math.random() < 0.4) {
+            const forestZones = [0, 3, 4, 7];
+            const zoneIdx = forestZones[Math.floor(Math.random() * forestZones.length)];
+            for(let i=0; i<3; i++) spawnAI(FACTIONS.GANG, islands[zoneIdx]);
+        }
+        
+        strategicTimer = 0;
     }
 }
 
 function update() {
-    // Blackpost Logic
-    blackpostTimer++;
-    if (blackpostTimer > BLACKPOST_INTERVAL) {
-        blackpostTimer = 0;
-        // Activate 3 random posts
-        for(let i=0; i<3; i++) {
-            const p = entities.posts[Math.floor(Math.random() * entities.posts.length)];
-            p.isBlackpost = true;
-            p.blackzoneRadius = 50;
+    if (!gameRunning) return;
+
+    // --- PLANE DROP STATE ---
+    if (gameState === 'PLANE') {
+        plane.x += plane.speed;
+        camera.x = plane.x - canvas.width / 2;
+        camera.y = plane.y - canvas.height / 2;
+        jobPanel.innerText = "PRESS [SPACE] TO DEPLOY";
+
+        // Auto-drop at end of map
+        if (plane.x > WORLD_WIDTH + 500) {
+            deployPlayer();
         }
-        blackpostActive = true;
+        return; // Skip rest of update
+    }
+
+    // Blackpost Logic
+    if (gameMode === 'BLACKPOST') {
+        blackpostTimer++;
+        if (blackpostTimer > BLACKPOST_INTERVAL) {
+            blackpostTimer = 0;
+            // Activate 5 random posts (Canon 6.2)
+            for(let i=0; i<5; i++) {
+                const p = entities.posts[Math.floor(Math.random() * entities.posts.length)];
+                p.isBlackpost = true;
+                p.blackzoneRadius = 50;
+            }
+            blackpostActive = true;
+        }
+    } else {
+        // Main Mode Logic
+        updateStrategicAI();
     }
 
     // Update Posts
     entities.posts.forEach(p => p.update());
+
+    // Update Vehicles
+    entities.vehicles.forEach(v => v.update());
 
     // Update Units
     for (let i = entities.units.length - 1; i >= 0; i--) {
@@ -408,11 +722,21 @@ function update() {
     updateStats();
 }
 
+function deployPlayer() {
+    gameState = 'PLAYING';
+    entities.player = new Unit(plane.x, plane.y, FACTIONS.PLAYER, true);
+    entities.units.push(entities.player);
+    jobPanel.innerText = "SURVIVE";
+}
+
 function updateStats() {
     const counts = { player: 0, red: 0, blue: 0, green: 0 };
     entities.posts.forEach(p => counts[p.owner.id] ? counts[p.owner.id]++ : null);
     
-    let blackpostHtml = blackpostActive ? '<br><span style="color:red; font-weight:bold;">⚠ BLACKPOST EVENT ⚠</span>' : '';
+    let extraHtml = '';
+    if (gameMode === 'BLACKPOST' && blackpostActive) {
+        extraHtml = '<br><span style="color:red; font-weight:bold;">⚠ BLACKPOST EVENT ⚠</span>';
+    }
 
     statsDiv.innerHTML = `
         <span style="color:${FACTIONS.PLAYER.color}">PLAYER: ${counts.player || 0}</span> | 
@@ -420,17 +744,41 @@ function updateStats() {
         <span style="color:${FACTIONS.RED.color}">RED: ${counts.red || 0}</span><br>
         <span style="color:${FACTIONS.BLUE.color}">BLUE: ${counts.blue || 0}</span><br>
         <span style="color:${FACTIONS.GREEN.color}">GREEN: ${counts.green || 0}</span>
-        ${blackpostHtml}
+        ${extraHtml}
     `;
 }
 
 function draw() {
+    if (!gameRunning) return;
+
     // Background
     ctx.fillStyle = '#050505'; // Deep water
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
+
+    if (gameState === 'PLANE') {
+        // Draw Plane
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(plane.x + 40, plane.y);
+        ctx.lineTo(plane.x - 20, plane.y - 30);
+        ctx.lineTo(plane.x - 20, plane.y + 30);
+        ctx.fill();
+    }
+
+    // Draw Roads (Visual only)
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 60;
+    ctx.beginPath();
+    // Horizontal road
+    ctx.moveTo(0, WORLD_HEIGHT / 2);
+    ctx.lineTo(WORLD_WIDTH, WORLD_HEIGHT / 2);
+    // Vertical roads
+    ctx.moveTo(WORLD_WIDTH * 0.25, 0); ctx.lineTo(WORLD_WIDTH * 0.25, WORLD_HEIGHT);
+    ctx.moveTo(WORLD_WIDTH * 0.75, 0); ctx.lineTo(WORLD_WIDTH * 0.75, WORLD_HEIGHT);
+    ctx.stroke();
 
     // Draw Islands
     islands.forEach(island => {
@@ -444,20 +792,12 @@ function draw() {
         ctx.stroke();
     });
 
-    // Draw Connections (Visual)
-    // ctx.strokeStyle = '#333';
-    // ctx.lineWidth = 40;
-    // ctx.beginPath();
-    // ctx.moveTo(1200, 700); ctx.lineTo(1800, 700); // Top bridge
-    // ctx.moveTo(1200, 2300); ctx.lineTo(1800, 2300); // Bottom bridge
-    // ctx.moveTo(700, 1200); ctx.lineTo(700, 1800); // Left bridge
-    // ctx.moveTo(2300, 1200); ctx.lineTo(2300, 1800); // Right bridge
-    // ctx.stroke();
-
     // Draw Entities
+    entities.buildings.forEach(b => b.draw());
     entities.posts.forEach(p => p.draw());
     entities.units.forEach(u => u.draw());
     entities.bullets.forEach(b => b.draw());
+    entities.vehicles.forEach(v => v.draw());
     entities.particles.forEach(p => {
         ctx.fillStyle = p.color;
         ctx.fillRect(p.x, p.y, 4, 4);
@@ -473,7 +813,17 @@ function loop() {
 }
 
 // --- INPUT ---
-window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'KeyF') {
+        interact();
+    } else {
+        buyItem(e.code);
+    }
+    if (e.code === 'Space' && gameState === 'PLANE') {
+        deployPlayer();
+    }
+});
 window.addEventListener('keyup', e => keys[e.code] = false);
 window.addEventListener('mousemove', e => {
     mouse.x = e.clientX;
@@ -488,6 +838,4 @@ window.addEventListener('resize', () => {
     canvas.height = window.innerHeight;
 });
 
-// Start
-init();
-loop();
+// Note: Game starts via HTML buttons calling startGame()
