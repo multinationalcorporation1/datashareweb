@@ -1,11 +1,12 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-const statsDiv = document.getElementById('stats'); 
+const statsDiv = document.getElementById('stats');
 const uiLayer = document.getElementById('ui-layer');
 const mainMenu = document.getElementById('main-menu');
 const jobPanel = document.getElementById('job-panel');
 const wantedDiv = document.getElementById('wanted-level');
 const gpDiv = document.getElementById('gp-display');
+const gameOverScreen = document.getElementById('game-over');
 
 // --- CONFIGURATION ---
 canvas.width = window.innerWidth;
@@ -67,6 +68,9 @@ const WANTED_DECAY_TIME = 1200; // 20 seconds to lose one level
 let playerMoney = 0;
 let playerLevel = 1;
 
+const CITY_GRID_SIZE = 120;
+const CITY_ROAD_WIDTH = 40;
+
 // --- CLASSES ---
 
 class Building {
@@ -75,6 +79,8 @@ class Building {
         this.y = y;
         this.w = w;
         this.h = h;
+        this.enterable = true;
+        this.color = ['#34495e', '#2c3e50', '#4a235a', '#1b4f72', '#145a32'][Math.floor(Math.random() * 5)];
     }
     draw() {
         // Shadow
@@ -82,13 +88,25 @@ class Building {
         ctx.fillRect(this.x + 8, this.y + 8, this.w, this.h);
 
         // Rooftop (GTA 1 Style flat shading)
-        ctx.fillStyle = '#34495e'; // Dark Blue-Grey Roof
+        ctx.fillStyle = this.color; 
         ctx.fillRect(this.x, this.y, this.w, this.h);
         
         // Roof Border/Parapet
         ctx.strokeStyle = '#5d6d7e';
         ctx.lineWidth = 3;
         ctx.strokeRect(this.x + 2, this.y + 2, this.w - 4, this.h - 4);
+
+        // Windows (Grid pattern)
+        ctx.fillStyle = '#17202a';
+        for(let wx = this.x + 6; wx < this.x + this.w - 10; wx += 12) {
+            for(let wy = this.y + 6; wy < this.y + this.h - 10; wy += 12) {
+                ctx.fillRect(wx, wy, 6, 6);
+            }
+        }
+
+        // Entrance / Door
+        ctx.fillStyle = '#000';
+        ctx.fillRect(this.x + this.w/2 - 8, this.y + this.h, 16, 4); // Door at bottom edge
 
         // Rooftop Detail (AC Unit)
         ctx.fillStyle = '#2c3e50';
@@ -97,24 +115,43 @@ class Building {
 }
 
 class Prop {
-    constructor(x, y) {
+    constructor(x, y, type = 'light') {
         this.x = x;
         this.y = y;
-        this.w = 8;
-        this.h = 40;
+        this.type = type;
+        this.w = type === 'tree' ? 24 : 8;
+        this.h = type === 'tree' ? 24 : 40;
         this.hp = 10;
         this.color = '#707B7C';
     }
     draw() {
         if (this.hp <= 0) return;
-        // Post
-        ctx.fillStyle = this.color;
-        ctx.fillRect(this.x - this.w / 2, this.y - this.h, this.w, this.h);
-        // Light
-        ctx.fillStyle = '#f1c40f';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y - this.h, 10, 0, Math.PI * 2);
-        ctx.fill();
+        
+        if (this.type === 'light') {
+            // Post
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x - this.w / 2, this.y - this.h, this.w, this.h);
+            // Light
+            ctx.fillStyle = '#f1c40f';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y - this.h, 10, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (this.type === 'tree') {
+            // Tree Shadow
+            ctx.fillStyle = 'rgba(0,0,0,0.2)';
+            ctx.beginPath();
+            ctx.arc(this.x + 5, this.y + 5, 15, 0, Math.PI * 2);
+            ctx.fill();
+            // Tree Top
+            ctx.fillStyle = '#229954';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 15, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#1e8449'; // Center
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
     takeDamage(amount) {
         this.hp -= amount;
@@ -309,8 +346,12 @@ class Unit {
         this.maxHp = 100;
         this.currentVehicle = null;
         this.isCivilian = faction.id === FACTIONS.NEUTRAL.id;
-        this.aiState = 'wander';
-        this.wanderTarget = { x: x, y: y };
+        this.work = { type: 'IDLE', timer: Math.random() * 100 };
+        this.wildState = false; // "Wild Randomness" Trigger
+        this.personality = Math.random(); // 0.0 - 1.0 bias
+        this.homePost = null; // For Gov defense
+        this.attackTarget = null; // For Gang attacks
+        this.scanTimer = Math.floor(Math.random() * 60); // Performance throttling
     }
 
     takeDamage(amount, attackerFaction) {
@@ -328,6 +369,10 @@ class Unit {
                     modifyGP(-50); // Killing civilian
                     increaseWantedLevel();
                 }
+            } else if (attackerFaction.id !== this.faction.id) {
+                // Self Defense: If attacked by enemy, fight back
+                // Force combat scan immediately
+                this.findTarget(true); 
             }
         }
     }
@@ -384,56 +429,30 @@ class Unit {
                 // Fire rate improves with level
                 this.cooldown = Math.max(5, 10 - playerLevel); 
             }
-        } else if (this.isCivilian) {
-            // --- CIVILIAN AI ---
-            if (this.aiState === 'wander') {
-                const distToTarget = Math.hypot(this.wanderTarget.x - this.x, this.wanderTarget.y - this.y);
-                if (distToTarget < 20 || Math.random() < 0.01) {
-                    this.wanderTarget.x = this.x + (Math.random() - 0.5) * 200;
-                    this.wanderTarget.y = this.y + (Math.random() - 0.5) * 200;
-                }
-                this.angle = Math.atan2(this.wanderTarget.y - this.y, this.wanderTarget.x - this.x);
-                this.x += Math.cos(this.angle) * (this.speed * 0.5);
-                this.y += Math.sin(this.angle) * (this.speed * 0.5);
-
-                // Check for danger (nearby Gangs or gunfire)
-                for (const u of entities.units) {
-                    if (u.faction.id === FACTIONS.GANG.id && Math.hypot(u.x - this.x, u.y - this.y) < 150) {
-                        this.aiState = 'flee';
-                        this.target = u; // Flee from this unit
-                        break;
-                    }
-                }
-            } else if (this.aiState === 'flee') {
-                if (!this.target || this.target.hp <= 0 || Math.hypot(this.target.x - this.x, this.target.y - this.y) > 300) {
-                    this.aiState = 'wander'; // Danger has passed
-                    this.target = null;
-                } else {
-                    this.angle = Math.atan2(this.y - this.target.y, this.x - this.target.x);
-                    this.x += Math.cos(this.angle) * this.speed;
-                    this.y += Math.sin(this.angle) * this.speed;
-                }
-            }
         } else {
-            // AI Logic
-            if (!this.target || this.target.owner === this.faction || Math.random() < 0.01) {
-                this.findTarget();
-            }
+            // --- NPC SYSTEM: RAPID RANDOMNESS ---
+            
+            // 1. Check for Threats (Combat Override)
+            this.findTarget();
 
             if (this.target) {
+                // COMBAT STATE
                 const dist = Math.hypot(this.target.x - this.x, this.target.y - this.y);
-                this.angle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
                 
-                if (dist > 150) {
+                // Face target
+                this.angle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+
+                if (dist < 300 && this.cooldown <= 0) {
+                    shoot(this);
+                    this.cooldown = 40 + Math.random() * 20;
+                } else if (dist > 300) {
+                    // Chase if out of range
                     this.x += Math.cos(this.angle) * this.speed;
                     this.y += Math.sin(this.angle) * this.speed;
                 }
-
-                // Shoot if looking at target
-                if (dist < 350 && this.cooldown <= 0) {
-                    shoot(this);
-                    this.cooldown = 40 + Math.random() * 20;
-                }
+            } else {
+                // LIFE STATE (Work System)
+                this.executeWork();
             }
         }
 
@@ -444,24 +463,167 @@ class Unit {
         this.y = Math.max(0, Math.min(WORLD_HEIGHT, this.y));
     }
 
-    findTarget() {
+    executeWork() {
+        // Check Wild State Completion (Gangs)
+        if (this.wildState && this.faction.id === FACTIONS.GANG.id && this.attackTarget) {
+            if (this.attackTarget.owner.id === FACTIONS.GANG.id) {
+                this.wildState = false; // Calm down after victory
+                this.attackTarget = null;
+                this.pickNewWork();
+            }
+        }
+
+        if (this.work.timer > 0) this.work.timer--;
+
+        let moveTarget = null;
+        let moveSpeed = this.speed * 0.5; // Default slow (Civilian speed)
+
+        switch(this.work.type) {
+            case 'IDLE':
+            case 'LOITER':
+                // Do nothing
+                break;
+            case 'STROLL':
+            case 'PATROL':
+                moveTarget = this.work.target;
+                break;
+            case 'SOCIAL':
+                if (this.work.target && this.work.target.hp > 0) {
+                    moveTarget = { x: this.work.target.x, y: this.work.target.y };
+                    if (Math.hypot(this.x - moveTarget.x, this.y - moveTarget.y) < 40) moveTarget = null; // Stop near friend
+                } else {
+                    this.work.timer = 0; // Friend gone
+                }
+                break;
+            case 'ASSAULT': // Wild Gang
+                moveTarget = this.work.target;
+                moveSpeed = this.speed; // Run
+                break;
+            case 'DEFEND': // Wild Gov
+                moveTarget = this.work.target;
+                moveSpeed = this.speed;
+                if (Math.hypot(this.x - moveTarget.x, this.y - moveTarget.y) < 60) moveTarget = null; // Hold position
+                break;
+        }
+
+        if (moveTarget) {
+            this.moveTo(moveTarget.x, moveTarget.y, moveSpeed);
+            // Arrival check
+            if (Math.hypot(this.x - moveTarget.x, this.y - moveTarget.y) < 15) {
+                if (['STROLL', 'PATROL'].includes(this.work.type)) this.pickNewWork();
+            }
+        } else if (this.work.timer <= 0 && !['ASSAULT', 'DEFEND'].includes(this.work.type)) {
+            // Work finished, pick new one
+            this.pickNewWork();
+        }
+    }
+
+    pickNewWork() {
+        const options = [];
+        
+        // 1. WILD STATE (Event Driven)
+        if (this.wildState) {
+            if (this.faction.id === FACTIONS.GANG.id && this.attackTarget) {
+                this.work = { type: 'ASSAULT', target: this.attackTarget };
+                return;
+            }
+            if (this.faction.id === FACTIONS.GOVERNMENT.id && this.homePost) {
+                this.work = { type: 'DEFEND', target: this.homePost };
+                return;
+            }
+        }
+
+        // 2. CIVILIAN LIFE (Default for everyone)
+        options.push({ type: 'IDLE', weight: 1.0, duration: 60 + Math.random() * 100 });
+        options.push({ type: 'STROLL', weight: 1.0, target: { x: this.x + (Math.random()-0.5)*300, y: this.y + (Math.random()-0.5)*300 } });
+        
+        // 3. ROLE FLAVOR
+        if (this.faction.id === FACTIONS.GANG.id) {
+            options.push({ type: 'LOITER', weight: 1.5, duration: 200 });
+            // Find a buddy to talk to
+            const buddy = entities.units.find(u => u !== this && u.faction === this.faction && Math.hypot(u.x-this.x, u.y-this.y) < 200);
+            if (buddy) options.push({ type: 'SOCIAL', weight: 1.0, target: buddy, duration: 180 });
+        } else if (this.faction.id === FACTIONS.GOVERNMENT.id) {
+            if (this.homePost) {
+                options.push({ type: 'PATROL', weight: 2.0, target: { x: this.homePost.x + (Math.random()-0.5)*200, y: this.homePost.y + (Math.random()-0.5)*200 } });
+            }
+        } else if (this.isCivilian) {
+             options.push({ type: 'STROLL', weight: 2.0, target: { x: this.x + (Math.random()-0.5)*400, y: this.y + (Math.random()-0.5)*400 } });
+        }
+
+        // Weighted Selection
+        let totalWeight = options.reduce((sum, opt) => sum + opt.weight, 0);
+        let r = Math.random() * totalWeight;
+        for (let opt of options) {
+            if (r < opt.weight) {
+                this.work = { type: opt.type, target: opt.target, timer: opt.duration || 0 };
+                return;
+            }
+            r -= opt.weight;
+        }
+        // Fallback
+        this.work = { type: 'IDLE', timer: 60 };
+    }
+
+    moveTo(tx, ty, spd) {
+        this.angle = Math.atan2(ty - this.y, tx - this.x);
+        this.x += Math.cos(this.angle) * spd;
+        this.y += Math.sin(this.angle) * spd;
+    }
+
+    findTarget(forceSelfDefense = false) {
+        // If we already have a valid target, stick to it unless it's dead or far
+        if (this.target && (this.target.hp <= 0 || Math.hypot(this.target.x - this.x, this.target.y - this.y) > 400)) {
+            this.target = null;
+        }
+        if (this.target) return;
+
+        // Throttle AI scans to improve performance
+        if (!forceSelfDefense) {
+            if (this.scanTimer > 0) {
+                this.scanTimer--;
+                return;
+            }
+            this.scanTimer = 30 + Math.floor(Math.random() * 30);
+        }
+
         // AI LOGIC: Gangs Attack, Governments Defend
         let nearest = null;
         let minDst = Infinity;
 
+        // GANG LOGIC
         if (this.faction.id === FACTIONS.GANG.id) {
-            // Gangs look for Government posts to attack
-            entities.posts.forEach(p => {
-                if (p.owner.id === FACTIONS.GOVERNMENT.id || p.owner.id === FACTIONS.PLAYER.id) {
-                    const d = Math.hypot(p.x - this.x, p.y - this.y);
-                    if (d < minDst) {
-                        minDst = d;
-                        nearest = p;
+            // Only aggressive if in Wild State
+            if (this.wildState && this.attackTarget) {
+                // 1. Check if target post is still enemy
+                if (this.attackTarget.owner.id !== FACTIONS.GANG.id) {
+                    const d = Math.hypot(this.attackTarget.x - this.x, this.attackTarget.y - this.y);
+                    if (d < 300) {
+                        this.target = this.attackTarget;
+                        return;
                     }
                 }
-            });
-        } else if (this.faction.id === FACTIONS.GOVERNMENT.id) {
-            // Government AI prioritizes player if wanted level is high
+                // 2. Target defenders near the objective
+                entities.units.forEach(u => {
+                    if (u.faction.id === FACTIONS.GOVERNMENT.id || u.faction.id === FACTIONS.PLAYER.id) {
+                        const d = Math.hypot(u.x - this.x, u.y - this.y);
+                        if (d < 250 && d < minDst) { minDst = d; nearest = u; }
+                    }
+                });
+            }
+            // Self Defense (Normal State)
+            if (forceSelfDefense) {
+                 entities.units.forEach(u => {
+                    if (u.faction.id !== FACTIONS.GANG.id) {
+                        const d = Math.hypot(u.x - this.x, u.y - this.y);
+                        if (d < 200 && d < minDst) { minDst = d; nearest = u; }
+                    }
+                });
+            }
+        } 
+        // GOVERNMENT LOGIC
+        else if (this.faction.id === FACTIONS.GOVERNMENT.id) {
+            // 1. Prioritize Player if Wanted
             if (playerWantedLevel > 0 && entities.player && entities.player.hp > 0) {
                 const playerDist = Math.hypot(entities.player.x - this.x, entities.player.y - this.y);
                 // Aggression range increases with wanted level
@@ -471,14 +633,18 @@ class Unit {
                 }
             }
 
-            // Government looks for Gang UNITS to defend against
+            // 2. Defend Post (Guard Duty)
+            const defensePoint = this.homePost || this;
             entities.units.forEach(u => {
                 if (u.faction.id === FACTIONS.GANG.id || u.faction.id === FACTIONS.PLAYER.id) {
-                    const d = Math.hypot(u.x - this.x, u.y - this.y);
-                    if (d < minDst) {
+                    // Only engage if enemy is aggressive (Wild State) or Player
+                    if (u.faction.id === FACTIONS.GANG.id && !u.wildState) return;
+
+                    const d = Math.hypot(u.x - defensePoint.x, u.y - defensePoint.y);
+                    // Strict defense radius
+                    if (d < 250 && d < minDst) {
                         minDst = d;
                         nearest = u;
-                        if (u.isPlayer) minDst *= 1.5; // De-prioritize player unless wanted
                     }
                 }
             });
@@ -511,9 +677,10 @@ class Unit {
             return;
         }
         // Gun
-        ctx.fillStyle = '#111';
-        ctx.fillRect(4, -2, 14, 4);
-
+        if (this.target || this.wildState) { // Only show gun if active/wild
+            ctx.fillStyle = '#111';
+            ctx.fillRect(4, -2, 14, 4);
+        }
         // Selection ring for player
         if (this.isPlayer) {
             ctx.strokeStyle = '#fff';
@@ -577,6 +744,7 @@ function startGame(mode) {
     gameRunning = true;
     gameState = 'PLAYING'; // Default, overridden below for Blackpost
     mainMenu.style.display = 'none';
+    gameOverScreen.style.display = 'none';
     uiLayer.style.display = 'block';
     document.getElementById('mode-title').innerText = mode === 'MAIN' ? 'MAIN GAME MODE' : 'BLACKPOST MODE';
     
@@ -604,10 +772,19 @@ function startGame(mode) {
     // Generate Posts (Canon: 50 per city)
     islands.forEach((island, idx) => {
         for (let i = 0; i < 50; i++) {
-            // Cluster posts in the "City Center" (inner 70% of island)
-            const margin = 200;
-            const px = island.x + margin + Math.random() * (island.w - margin*2);
-            const py = island.y + margin + Math.random() * (island.h - margin*2);
+            // Place posts near road intersections for better alignment
+            const cols = Math.floor((island.w - 100) / CITY_GRID_SIZE);
+            const rows = Math.floor((island.h - 100) / CITY_GRID_SIZE);
+            
+            // Pick a random intersection
+            const c = Math.floor(Math.random() * (cols + 1));
+            const r = Math.floor(Math.random() * (rows + 1));
+            
+            const startX = island.x + 50;
+            const startY = island.y + 50;
+            
+            const px = startX + c * CITY_GRID_SIZE;
+            const py = startY + r * CITY_GRID_SIZE;
             
             const post = new Post(px, py, `P-${idx}-${i}`);
             // Apply Canon Ratios
@@ -647,23 +824,58 @@ function startGame(mode) {
 function generateWorld() {
     // Generate buildings in city zones
     islands.forEach(island => {
-        for (let i = 0; i < 20; i++) {
-            const w = 50 + Math.random() * 100;
-            const h = 50 + Math.random() * 100;
-            const x = island.x + Math.random() * (island.w - w);
-            const y = island.y + Math.random() * (island.h - h);
-            entities.buildings.push(new Building(x, y, w, h));
+        // Create Grid System
+        // Align buildings perfectly within the grid cells defined by CITY_GRID_SIZE
+        
+        const startX = island.x + 50; 
+        const startY = island.y + 50;
+        const cols = Math.floor((island.w - 100) / CITY_GRID_SIZE);
+        const rows = Math.floor((island.h - 100) / CITY_GRID_SIZE);
+
+        for (let c = 0; c < cols; c++) {
+            for (let r = 0; r < rows; r++) {
+                const cellX = startX + c * CITY_GRID_SIZE;
+                const cellY = startY + r * CITY_GRID_SIZE;
+                
+                // Center of the block (between roads)
+                const centerX = cellX + CITY_GRID_SIZE / 2;
+                const centerY = cellY + CITY_GRID_SIZE / 2;
+
+                // Building size (fit within grid minus road width)
+                const maxBuildingSize = CITY_GRID_SIZE - CITY_ROAD_WIDTH - 10;
+                
+                // 80% chance to place a building (approx 100 buildings per 1300x1300 island)
+                if (Math.random() < 0.8) {
+                    const w = maxBuildingSize;
+                    const h = maxBuildingSize;
+                    
+                    entities.buildings.push(new Building(centerX - w/2, centerY - h/2, w, h));
+                } else {
+                    // Empty lot: Place props (Lights or Trees)
+                    if (Math.random() < 0.5) entities.props.push(new Prop(centerX, centerY));
+                    if (Math.random() < 0.5) entities.props.push(new Prop(centerX + 20, centerY + 20, 'tree'));
+                }
+            }
         }
-        // Spawn props (streetlights)
-        for (let i = 0; i < 30; i++) {
-            const x = island.x + Math.random() * island.w;
-            const y = island.y + Math.random() * island.h;
-            entities.props.push(new Prop(x, y));
-        }
-        // Spawn civilians
-        for (let i = 0; i < 15; i++) {
-            const x = island.x + Math.random() * island.w;
-            const y = island.y + Math.random() * island.h;
+
+        // Spawn 200 NPCs per city
+        for (let i = 0; i < 200; i++) {
+            // Spawn on roads to avoid building clipping
+            const isHorizontal = Math.random() < 0.5;
+            let x, y;
+            
+            if (isHorizontal) {
+                // On a horizontal road
+                const r = Math.floor(Math.random() * (rows + 1));
+                y = startY + r * CITY_GRID_SIZE;
+                x = island.x + Math.random() * island.w;
+            } else {
+                // On a vertical road
+                const c = Math.floor(Math.random() * (cols + 1));
+                x = startX + c * CITY_GRID_SIZE;
+                y = island.y + Math.random() * island.h;
+            }
+            
             entities.units.push(new Unit(x, y, FACTIONS.NEUTRAL));
         }
     });
@@ -677,7 +889,19 @@ function generateWorld() {
 function spawnAI(faction, area) {
     const x = area.x + Math.random() * area.w;
     const y = area.y + Math.random() * area.h;
-    entities.units.push(new Unit(x, y, faction));
+    const unit = new Unit(x, y, faction);
+
+    if (faction === FACTIONS.GOVERNMENT) {
+        // Assign to nearest post
+        let nearest = null;
+        let minDst = Infinity;
+        entities.posts.forEach(p => {
+            const d = Math.hypot(p.x - x, p.y - y);
+            if (d < minDst) { minDst = d; nearest = p; }
+        });
+        unit.homePost = nearest;
+    }
+    entities.units.push(unit);
 }
 
 function shoot(unit) {
@@ -846,29 +1070,38 @@ function updateStrategicAI() {
     if (strategicTimer > 600) { // Every ~10 seconds
         strategicTimer = 0;
 
-        // 1. Government Reinforcement (Defensive)
-        // They spawn at their own posts to hold the line
-        const govPosts = entities.posts.filter(p => p.owner.id === FACTIONS.GOVERNMENT.id);
-        if (govPosts.length > 0 && Math.random() < 0.5) {
-            const spawnPost = govPosts[Math.floor(Math.random() * govPosts.length)];
-            entities.units.push(new Unit(spawnPost.x, spawnPost.y, FACTIONS.GOVERNMENT));
-        }
-
-        // 2. Gang Expansion (Aggressive)
-        // They spawn in the "Forests" (edges of islands) and attack
-        islands.forEach(island => {
-            if (Math.random() < 0.4) { // 40% chance per cycle
-                // Spawn on edge
-                const x = Math.random() < 0.5 ? island.x : island.x + island.w;
-                const y = island.y + Math.random() * island.h;
-                entities.units.push(new Unit(x, y, FACTIONS.GANG));
+        // TRIGGER GANG ATTACKS
+        // Instead of spawning new units, command existing idle gangs to attack
+        const idleGangs = entities.units.filter(u => u.faction.id === FACTIONS.GANG.id && !u.wildState);
+        
+        if (idleGangs.length > 0 && Math.random() < 0.3) { // 30% chance to trigger attack
+            // Pick a target post (Gov owned)
+            const targets = entities.posts.filter(p => p.owner.id === FACTIONS.GOVERNMENT.id);
+            if (targets.length > 0) {
+                const targetPost = targets[Math.floor(Math.random() * targets.length)];
+                
+                // Send 3-5 nearby gang members to attack it (Activate Wild Randomness)
+                idleGangs.sort((a, b) => Math.hypot(a.x - targetPost.x, a.y - targetPost.y) - Math.hypot(b.x - targetPost.x, b.y - targetPost.y));
+                
+                for(let i=0; i<Math.min(5, idleGangs.length); i++) {
+                    idleGangs[i].wildState = true;
+                    idleGangs[i].attackTarget = targetPost;
+                    idleGangs[i].pickNewWork(); // Switch immediately
+                }
             }
-        });
+        }
     }
 }
 
 function update() {
     if (!gameRunning) return;
+
+    // Check Game Over
+    if (entities.player && entities.player.hp <= 0) {
+        gameRunning = false;
+        gameOverScreen.style.display = 'flex';
+        return;
+    }
 
     // --- PLANE DROP STATE ---
     if (gameState === 'PLANE') {
@@ -1048,14 +1281,33 @@ function draw() {
         
         ctx.fillRect(island.x, island.y, island.w, island.h);
         
-        // City Grid (Roads)
-        ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-        ctx.lineWidth = 40;
+        // City Grid (Sidewalks)
+        ctx.strokeStyle = '#95a5a6'; // Concrete Sidewalk
+        ctx.lineWidth = CITY_ROAD_WIDTH + 10; 
         ctx.beginPath();
-        // Draw a grid every 200px
-        for(let x=island.x + 100; x<=island.x+island.w; x+=200) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
-        for(let y=island.y + 100; y<=island.y+island.h; y+=200) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
+        const startX = island.x + 50;
+        const startY = island.y + 50;
+        for(let x = startX; x <= island.x + island.w - 50; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
+        for(let y = startY; y <= island.y + island.h - 50; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
         ctx.stroke();
+
+        // City Grid (Asphalt Roads)
+        ctx.strokeStyle = '#2c3e50'; // Dark Asphalt
+        ctx.lineWidth = CITY_ROAD_WIDTH; 
+        ctx.beginPath();
+        for(let x = startX; x <= island.x + island.w - 50; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
+        for(let y = startY; y <= island.y + island.h - 50; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
+        ctx.stroke();
+
+        // Road Markings (Dashed Lines)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([15, 25]);
+        ctx.beginPath();
+        for(let x = startX; x <= island.x + island.w - 50; x += CITY_GRID_SIZE) { ctx.moveTo(x, island.y); ctx.lineTo(x, island.y+island.h); }
+        for(let y = startY; y <= island.y + island.h - 50; y += CITY_GRID_SIZE) { ctx.moveTo(island.x, y); ctx.lineTo(island.x+island.w, y); }
+        ctx.stroke();
+        ctx.setLineDash([]);
     });
 
     // Draw Entities
