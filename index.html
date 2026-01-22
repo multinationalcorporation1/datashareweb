@@ -11,7 +11,7 @@
         <h1 style="color: #eee; text-shadow: 0 0 10px #fff;">TERMINAL CITIES</h1>
         <button class="menu-btn" onclick="startGame('MAIN')">MAIN GAME MODE</button>
         <button class="menu-btn" onclick="startGame('BLACKPOST')">BLACKPOST MODE</button>
-        <p style="color: #888; margin-top: 20px;">System-Driven Open World Control War</p>
+        <p style="color: #888; margin-top: 20px;">GOVERNMENT vs GANGS | CONTROL WAR</p>
     </div>
 
     <div id="ui-layer" style="display: none;">
@@ -29,7 +29,11 @@
                 [3] Spawn Vehicle ($2500)
             </div>
         </div>
-        <div class="hud-panel" id="stats">Initializing...</div>
+        <div class="hud-panel" id="stats-container">
+            <div id="stats">Initializing...</div>
+            <div id="wanted-level" style="color: #e74c3c; font-weight: bold; margin-top: 10px;"></div>
+            <div id="gp-display" style="margin-top: 5px; font-weight: bold; border-top: 1px solid #444; padding-top: 5px;"></div>
+        </div>
     </div>
     <canvas id="gameCanvas"></canvas>
     <script src="script.js"></script>
