@@ -1,0 +1,28 @@
+body {
+    margin: 0;
+    padding: 0;
+    background-color: #111;
+    color: #eee;
+    font-family: 'Courier New', Courier, monospace;
+    overflow: hidden;
+}
+
+#gameCanvas {
+    display: block;
+    background-color: #0a0a0a;
+}
+
+#ui-layer {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    pointer-events: none;
+}
+
+.hud-panel {
+    background: rgba(0, 0, 0, 0.7);
+    padding: 10px;
+    border: 1px solid #444;
+    margin-bottom: 10px;
+    max-width: 300px;
+}
