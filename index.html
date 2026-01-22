@@ -7,16 +7,27 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="ui-layer">
+    <div id="main-menu">
+        <h1 style="color: #eee; text-shadow: 0 0 10px #fff;">TERMINAL CITIES</h1>
+        <button class="menu-btn" onclick="startGame('MAIN')">MAIN GAME MODE</button>
+        <button class="menu-btn" onclick="startGame('BLACKPOST')">BLACKPOST MODE</button>
+        <p style="color: #888; margin-top: 20px;">System-Driven Open World Control War</p>
+    </div>
+
+    <div id="ui-layer" style="display: none;">
         <div class="hud-panel">
-            <h2>TERMINAL CITIES</h2>
-            <p><strong>WASD</strong> Move | <strong>CLICK</strong> Shoot</p>
-            <p>Rules:</p>
-            <ul style="font-size: 0.8em; padding-left: 15px;">
-                <li>Shoot ENEMY Post -> Damage</li>
-                <li>Shoot OWN Post -> Repair</li>
-                <li>0 HP -> Ownership Flip</li>
-            </ul>
+            <h3 id="mode-title">MODE</h3>
+            <div id="job-panel" style="margin-bottom: 10px; color: #f1c40f;">
+                Checking for contracts...
+            </div>
+            <div id="shop-panel" style="font-size: 0.8em; border-top: 1px solid #444; padding-top: 5px;">
+                <strong>CONTROLS & SHOP:</strong><br>
+                [F] Enter/Exit Vehicle<br>
+                [SPACE] Deploy (Blackpost)<br>
+                [1] Medkit ($200)<br>
+                [2] Weapon Upgr ($1000)<br>
+                [3] Spawn Vehicle ($2500)
+            </div>
         </div>
         <div class="hud-panel" id="stats">Initializing...</div>
     </div>
