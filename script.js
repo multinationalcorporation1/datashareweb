@@ -1,6 +1,6 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-const statsDiv = document.getElementById('stats');
+const statsDiv = document.getElementById('stats'); 
 const uiLayer = document.getElementById('ui-layer');
 const mainMenu = document.getElementById('main-menu');
 const jobPanel = document.getElementById('job-panel');
