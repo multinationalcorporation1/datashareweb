@@ -2,48 +2,369 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Terminal Cities: Control War</title>
-    <link rel="stylesheet" href="style.css">
+    <title>TC_CORE v11 | Pro Open World Architect</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root { --accent:#00ff88; --bg:#0b0c0e; --panel:#15171a; --border:#2a2d32; --text:#ececed; --danger:#ff4d4d; }
+        * { box-sizing: border-box; }
+        body { margin:0; background:var(--bg); color:var(--text); font-family: 'Inter', sans-serif; height:100vh; overflow:hidden; }
+        
+        .layout { display: grid; grid-template-columns: 280px 1fr 340px; grid-template-rows: 45px 1fr 240px; height: 100vh; }
+        header { grid-column: 1/4; background: #000; display: flex; align-items: center; padding: 0 15px; border-bottom: 1px solid var(--border); z-index: 1000; justify-content: space-between; }
+        
+        /* Panels */
+        .panel { background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+        .panel-h { background: #1c1f24; padding: 10px 15px; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #666; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+        
+        /* Viewport */
+        #vp { grid-column: 2; position: relative; background: #111; outline: none; }
+        .vp-tools { position: absolute; top: 15px; left: 15px; display: flex; gap: 4px; background: rgba(0,0,0,0.8); padding: 5px; border-radius: 6px; border: 1px solid var(--border); z-index: 10; }
+
+        /* Inspector */
+        .inspector { grid-column: 3; grid-row: 2/4; border-left: 1px solid var(--border); overflow-y: auto; }
+        .comp-box { border-bottom: 1px solid #222; padding: 15px; }
+        .comp-title { font-size: 11px; font-weight: 700; margin-bottom: 12px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+        
+        /* Inputs */
+        .field-row { display: grid; grid-template-columns: 80px 1fr; align-items: center; margin-bottom: 8px; gap: 10px; }
+        label { font-size: 10px; color: #888; }
+        input, select, textarea { background: #08090a; border: 1px solid var(--border); color: #fff; padding: 6px 10px; border-radius: 4px; font-size: 11px; }
+        input:focus { border-color: var(--accent); }
+        .xyz { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+        
+        /* Controls */
+        button { background: #2a2d32; color: #fff; border: 1px solid #3a3d42; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: 0.1s; }
+        button:hover { background: #3a3d42; border-color: var(--accent); }
+        button.active { background: var(--accent); color: #000; border: none; }
+        .play-btn { background: var(--accent); color: #000; border: none; font-weight: 900; padding: 6px 25px; }
+        
+        .is-playing .play-overlay { display: flex; }
+        .play-overlay { position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.9); border: 1px solid var(--accent); padding: 12px 25px; border-radius: 50px; display: none; align-items: center; gap: 15px; font-size: 12px; z-index: 1000; }
+    </style>
 </head>
 <body>
-    <div id="main-menu">
-        <h1 style="color: #eee; text-shadow: 0 0 10px #fff;">TERMINAL CITIES</h1>
-        <button class="menu-btn" onclick="startGame('MAIN')">MAIN GAME MODE</button>
-        <button class="menu-btn" onclick="startGame('BLACKPOST')">BLACKPOST MODE</button>
-        <p style="color: #888; margin-top: 20px;">GOVERNMENT vs GANGS | CONTROL WAR</p>
-    </div>
 
-    <div id="game-over" style="display: none;">
-        <h1 style="color: #e74c3c; font-size: 4em; text-shadow: 0 0 20px #000;">WASTED</h1>
-        <p id="death-reason" style="color: #fff; font-size: 1.5em;">You were killed in action.</p>
-        <button class="menu-btn" onclick="startGame(gameMode)">RESPAWN</button>
-    </div>
+<div class="play-overlay" id="play-ui">
+    <div style="width:10px; height:10px; border-radius:50%; background:red; animation: pulse 1s infinite"></div>
+    <b>SANDBOX ACTIVE</b> 
+    <span style="color:#888">| WASD Move | Shift Sprint | Space Jump | Esc Exit</span>
+</div>
 
-    <div id="ui-layer" style="display: none;">
-        <div class="hud-panel">
-            <h3 id="mode-title">MODE</h3>
-            <div id="job-panel" style="margin-bottom: 10px; color: #f1c40f;">
-                Checking for contracts...
-            </div>
-            <div id="shop-panel" style="font-size: 0.8em; border-top: 1px solid #444; padding-top: 5px;">
-                <strong>CONTROLS & SHOP:</strong><br>
-                [F] Enter/Exit Vehicle<br>
-                [1-7] Join Faction<br>
-                [SPACE] Deploy (Blackpost)<br>
-                [1] Medkit ($200)<br>
-                [2] Weapon Upgr ($1000)<br>
-                [3] Spawn Vehicle ($2500)
-            </div>
+<div class="layout">
+    <header>
+        <div style="font-weight:900; color:var(--accent); font-size:16px">TC_CORE <span style="font-weight:400; color:#555">v11.0</span></div>
+        <button class="play-btn" onclick="ED.togglePlay()" id="play-btn">ENTER GAMEWORLD</button>
+        <div>
+            <span style="font-size:10px; color:#444; margin-right:10px">AUTO-SAVE: ON</span>
+            <button onclick="ED.resetScene()">Clear World</button>
         </div>
-        <div class="hud-panel" id="stats-container">
-            <div id="stats">Initializing...</div>
-            <div id="wanted-level" style="color: #e74c3c; font-weight: bold; margin-top: 10px;"></div>
-            <div id="allegiance-display" style="margin-top: 5px; font-weight: bold; color: #f1c40f;"></div>
-            <div id="gp-display" style="margin-top: 5px; font-weight: bold; border-top: 1px solid #444; padding-top: 5px;"></div>
+    </header>
+
+    <aside class="panel">
+        <div class="panel-h">Outliner <button onclick="ED.spawn('box')">+</button></div>
+        <div id="hierarchy" style="overflow-y:auto; flex:1"></div>
+    </aside>
+
+    <main id="vp" tabindex="0">
+        <div class="vp-tools">
+            <button id="t-move" class="active" onclick="ED.setTool('translate')">Move [W]</button>
+            <button id="t-rot" onclick="ED.setTool('rotate')">Rot [E]</button>
+            <button id="t-scale" onclick="ED.setTool('scale')">Scale [R]</button>
+            <div style="width:1px; background:#333; margin:0 5px"></div>
+            <button id="t-snap" onclick="ED.toggleSnap()">Snap: OFF</button>
         </div>
-    </div>
-    <canvas id="gameCanvas"></canvas>
-    <script src="script.js"></script>
+    </main>
+
+    <aside class="inspector panel">
+        <div class="panel-h">Entity Inspector</div>
+        <div id="ins-root" style="display:none">
+            
+            <div class="comp-box">
+                <div class="comp-title"><span>■</span> Identity</div>
+                <div class="field-row"><label>Name</label><input type="text" id="p-name" oninput="ED.apply()"></div>
+                <div class="field-row">
+                    <label>Tag</label>
+                    <select id="p-tag" onchange="ED.apply()">
+                        <option value="static">Environment</option>
+                        <option value="player">Main Character</option>
+                        <option value="vehicle">Drivable Car</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="comp-box">
+                <div class="comp-title"><span>📐</span> Transform</div>
+                <label>Position</label>
+                <div class="xyz"><input type="number" id="p-px" step="0.1" oninput="ED.apply()"><input type="number" id="p-py" step="0.1" oninput="ED.apply()"><input type="number" id="p-pz" step="0.1" oninput="ED.apply()"></div>
+                <label style="margin-top:8px; display:block">Rotation</label>
+                <div class="xyz"><input type="number" id="p-rx" oninput="ED.apply()"><input type="number" id="p-ry" oninput="ED.apply()"><input type="number" id="p-rz" oninput="ED.apply()"></div>
+                <label style="margin-top:8px; display:block">Scale</label>
+                <div class="xyz"><input type="number" id="p-sx" step="0.1" oninput="ED.apply()"><input type="number" id="p-sy" step="0.1" oninput="ED.apply()"><input type="number" id="p-sz" step="0.1" oninput="ED.apply()"></div>
+            </div>
+
+            <div class="comp-box">
+                <div class="comp-title"><span>📜</span> Logic Script</div>
+                <textarea id="p-js" style="height:120px; font-family:'JetBrains Mono'; font-size:10px" oninput="ED.apply()" placeholder="// this.rotation.y += 0.01;"></textarea>
+            </div>
+
+            <div style="padding:15px"><button style="width:100%; color:var(--danger); border-color:#422" onclick="ED.deleteObj()">Delete Entity</button></div>
+        </div>
+        <div id="ins-none" style="padding:40px; text-align:center; color:#444; font-size:11px">Select an object in the world to edit</div>
+    </aside>
+
+    <section style="grid-column:2; background:var(--panel); border-top:1px solid var(--border); padding:15px; display:flex; gap:15px">
+        <div style="flex:1">
+            <div class="panel-h" style="background:none; border:none; padding:0 0 10px 0">Asset browser</div>
+            <div style="display:flex; gap:10px">
+                <button onclick="ED.spawn('box')">📦 Cube Mesh</button>
+                <button onclick="ED.spawn('ground')">🗺️ Level Floor</button>
+                <button style="border-color:var(--accent)" onclick="document.getElementById('file-in').click()">📤 Import .GLB</button>
+            </div>
+            <input type="file" id="file-in" hidden onchange="ED.handleImport(this)">
+        </div>
+    </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.145/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.145/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.145/examples/js/controls/TransformControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.145/examples/js/loaders/GLTFLoader.js"></script>
+
+<script>
+class EngineArchitect {
+    constructor() {
+        this.entities = [];
+        this.selected = null;
+        this.isPlaying = false;
+        this.isSnapping = false;
+        this.clock = new THREE.Clock();
+        this.keys = {};
+        
+        // Character & Cam Physics
+        this.player = null;
+        this.vY = 0;
+        this.camAngle = { theta: 0, phi: 0.8 };
+
+        this.init();
+        this.loop();
+    }
+
+    init() {
+        const vp = document.getElementById('vp');
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x0a0b0d);
+        this.scene.add(new THREE.GridHelper(200, 100, 0x222222, 0x181818));
+
+        this.camera = new THREE.PerspectiveCamera(70, vp.clientWidth/vp.clientHeight, 0.1, 2000);
+        this.camera.position.set(20, 20, 20);
+
+        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        this.renderer.setSize(vp.clientWidth, vp.clientHeight);
+        this.renderer.shadowMap.enabled = true;
+        vp.appendChild(this.renderer.domElement);
+
+        this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const sun = new THREE.DirectionalLight(0xffffff, 1);
+        sun.position.set(30, 60, 30);
+        sun.castShadow = true;
+        this.scene.add(sun);
+
+        this.orbit = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+        this.gizmo = new THREE.TransformControls(this.camera, this.renderer.domElement);
+        this.gizmo.addEventListener('dragging-changed', e => this.orbit.enabled = !e.value);
+        this.gizmo.addEventListener('change', () => { if(this.selected) this.syncToInspector(); });
+        this.scene.add(this.gizmo);
+
+        // Key Listeners
+        window.addEventListener('keydown', e => {
+            this.keys[e.code] = true;
+            if(!this.isPlaying) {
+                if(e.code === 'KeyW') this.setTool('translate');
+                if(e.code === 'KeyE') this.setTool('rotate');
+                if(e.code === 'KeyR') this.setTool('scale');
+                if(e.code === 'Delete') this.deleteObj();
+                if(e.code === 'KeyF' && this.selected) this.focusCam();
+            }
+            if(e.code === 'Escape' && this.isPlaying) this.togglePlay();
+        });
+        window.addEventListener('keyup', e => this.keys[e.code] = false);
+        
+        vp.addEventListener('mousedown', e => this.pick(e));
+        vp.addEventListener('mousemove', e => {
+            if(this.isPlaying) {
+                this.camAngle.theta -= e.movementX * 0.003;
+                this.camAngle.phi = Math.max(0.1, Math.min(1.4, this.camAngle.phi - e.movementY * 0.003));
+            }
+        });
+
+        this.spawn('ground');
+    }
+
+    handleImport(input) {
+        if(!input.files[0]) return;
+        const url = URL.createObjectURL(input.files[0]);
+        new THREE.GLTFLoader().load(url, (gltf) => {
+            const m = gltf.scene;
+            m.name = input.files[0].name.split('.')[0];
+            m.userData = { tag: 'static', script: "" };
+            this.scene.add(m);
+            this.entities.push(m);
+            this.select(m);
+            this.updateOutliner();
+        });
+    }
+
+    spawn(type) {
+        let m = type === 'box' 
+            ? new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({color: 0x00ff88}))
+            : new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({color: 0x1a1a1a}));
+        
+        if(type === 'ground') m.rotation.x = -Math.PI/2;
+        m.name = type.toUpperCase() + "_" + Math.floor(Math.random()*100);
+        m.userData = { tag: 'static', script: "" };
+        m.castShadow = m.receiveShadow = true;
+        this.scene.add(m);
+        this.entities.push(m);
+        this.select(m);
+        this.updateOutliner();
+    }
+
+    pick(e) {
+        if(this.isPlaying || this.gizmo.dragging) return;
+        const rect = document.getElementById('vp').getBoundingClientRect();
+        const m = new THREE.Vector2(((e.clientX - rect.left)/rect.width)*2-1, -((e.clientY - rect.top)/rect.height)*2+1);
+        const ray = new THREE.Raycaster();
+        ray.setFromCamera(m, this.camera);
+        const hits = ray.intersectObjects(this.entities, true);
+        if(hits.length > 0) {
+            let o = hits[0].object;
+            while(o.parent && !this.entities.includes(o)) o = o.parent;
+            this.select(o);
+        }
+    }
+
+    select(obj) {
+        this.selected = obj;
+        if(obj) {
+            this.gizmo.attach(obj);
+            document.getElementById('ins-root').style.display = 'block';
+            document.getElementById('ins-none').style.display = 'none';
+            this.syncToInspector();
+        } else {
+            this.gizmo.detach();
+            document.getElementById('ins-root').style.display = 'none';
+            document.getElementById('ins-none').style.display = 'block';
+        }
+        this.updateOutliner();
+    }
+
+    syncToInspector() {
+        const o = this.selected;
+        document.getElementById('p-name').value = o.name;
+        document.getElementById('p-px').value = o.position.x.toFixed(2);
+        document.getElementById('p-py').value = o.position.y.toFixed(2);
+        document.getElementById('p-pz').value = o.position.z.toFixed(2);
+        document.getElementById('p-rx').value = THREE.MathUtils.radToDeg(o.rotation.x).toFixed(0);
+        document.getElementById('p-ry').value = THREE.MathUtils.radToDeg(o.rotation.y).toFixed(0);
+        document.getElementById('p-rz').value = THREE.MathUtils.radToDeg(o.rotation.z).toFixed(0);
+        document.getElementById('p-sx').value = o.scale.x.toFixed(2);
+        document.getElementById('p-sy').value = o.scale.y.toFixed(2);
+        document.getElementById('p-sz').value = o.scale.z.toFixed(2);
+        document.getElementById('p-tag').value = o.userData.tag;
+        document.getElementById('p-js').value = o.userData.script;
+    }
+
+    apply() {
+        if(!this.selected) return;
+        const o = this.selected;
+        o.name = document.getElementById('p-name').value;
+        o.position.set(parseFloat(document.getElementById('p-px').value), parseFloat(document.getElementById('p-py').value), parseFloat(document.getElementById('p-pz').value));
+        o.rotation.set(THREE.MathUtils.degToRad(parseFloat(document.getElementById('p-rx').value)), THREE.MathUtils.degToRad(parseFloat(document.getElementById('p-ry').value)), THREE.MathUtils.degToRad(parseFloat(document.getElementById('p-rz').value)));
+        o.scale.set(parseFloat(document.getElementById('p-sx').value), parseFloat(document.getElementById('p-sy').value), parseFloat(document.getElementById('p-sz').value));
+        o.userData.tag = document.getElementById('p-tag').value;
+        o.userData.script = document.getElementById('p-js').value;
+        this.updateOutliner();
+    }
+
+    updateOutliner() {
+        const h = document.getElementById('hierarchy');
+        h.innerHTML = "";
+        this.entities.forEach(ent => {
+            const d = document.createElement('div');
+            d.style.cssText = `padding:8px 15px; cursor:pointer; font-size:11px; border-left:3px solid ${ent === this.selected ? 'var(--accent)' : 'transparent'}; background:${ent === this.selected ? '#2a2d31' : 'transparent'}`;
+            d.textContent = ent.name;
+            d.onclick = () => this.select(ent);
+            h.appendChild(d);
+        });
+    }
+
+    setTool(m) { 
+        this.gizmo.setMode(m); 
+        document.querySelectorAll('.vp-tools button').forEach(b => b.classList.remove('active'));
+        document.getElementById('t-' + m.slice(0,3)).classList.add('active');
+    }
+
+    toggleSnap() {
+        this.isSnapping = !this.isSnapping;
+        this.gizmo.setTranslationSnap(this.isSnapping ? 1 : null);
+        this.gizmo.setRotationSnap(this.isSnapping ? THREE.MathUtils.degToRad(15) : null);
+        document.getElementById('t-snap').textContent = `Snap: ${this.isSnapping ? 'ON' : 'OFF'}`;
+    }
+
+    focusCam() {
+        this.orbit.target.copy(this.selected.position);
+        this.camera.position.set(this.selected.position.x + 10, this.selected.position.y + 10, this.selected.position.z + 10);
+        this.orbit.update();
+    }
+
+    togglePlay() {
+        this.isPlaying = !this.isPlaying;
+        document.body.classList.toggle('is-playing', this.isPlaying);
+        this.orbit.enabled = !this.isPlaying;
+        if(this.isPlaying) {
+            this.player = this.entities.find(e => e.userData.tag === 'player');
+            if(!this.player) { alert("Please set an object tag to 'Main Character' first!"); this.togglePlay(); }
+            else { document.getElementById('vp').requestPointerLock(); this.gizmo.detach(); }
+        } else {
+            document.exitPointerLock();
+            if(this.selected) this.gizmo.attach(this.selected);
+        }
+    }
+
+    loop() {
+        requestAnimationFrame(() => this.loop());
+        const dt = this.clock.getDelta();
+
+        if(this.isPlaying && this.player) {
+            const speed = this.keys['ShiftLeft'] ? 20 : 9;
+            const input = new THREE.Vector3();
+            if(this.keys['KeyW']) input.z -= 1;
+            if(this.keys['KeyS']) input.z += 1;
+            if(this.keys['KeyA']) input.x -= 1;
+            if(this.keys['KeyD']) input.x += 1;
+
+            if(input.length() > 0) {
+                input.applyEuler(new THREE.Euler(0, this.camAngle.theta, 0));
+                this.player.position.addScaledVector(input.normalize(), speed * dt);
+                this.player.rotation.y = THREE.MathUtils.lerp(this.player.rotation.y, Math.atan2(input.x, input.z), 0.1);
+            }
+
+            if(this.keys['Space'] && this.player.position.y <= 0.1) this.vY = 12;
+            this.vY -= 30 * dt;
+            this.player.position.y += this.vY * dt;
+            if(this.player.position.y < 0) { this.player.position.y = 0; this.vY = 0; }
+
+            const r = 12;
+            this.camera.position.set(this.player.position.x + r * Math.sin(this.camAngle.phi) * Math.sin(this.camAngle.theta), this.player.position.y + r * Math.cos(this.camAngle.phi) + 2, this.player.position.z + r * Math.sin(this.camAngle.phi) * Math.cos(this.camAngle.theta));
+            this.camera.lookAt(this.player.position.x, this.player.position.y + 1.5, this.player.position.z);
+        }
+        this.renderer.render(this.scene, this.camera);
+    }
+    
+    deleteObj() { if(!this.selected) return; this.scene.remove(this.selected); this.entities = this.entities.filter(e=>e!==this.selected); this.select(null); }
+    resetScene() { if(confirm("Clear everything?")) { this.entities.forEach(e=>this.scene.remove(e)); this.entities = []; this.select(null); } }
+}
+const ED = new EngineArchitect();
+</script>
 </body>
 </html>
